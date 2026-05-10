@@ -123,12 +123,7 @@ def upgrade() -> None:
         "chunks",
         ["document_version_id"],
     )
-    op.create_index(
-        "ix_chunks_embedding",
-        "chunks",
-        ["embedding"],
-        postgresql_using="hnsw",
-    )
+    # HNSW index requires pgvector 0.8.0+ with 3072-dim support. Add separately once DB is running.
     op.create_index(
         "ix_chunks_text_search",
         "chunks",

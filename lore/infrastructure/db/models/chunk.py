@@ -20,7 +20,7 @@ class ChunkORM(Base):
         ForeignKey("document_versions.id"), nullable=False, index=True
     )
     text: Mapped[str] = mapped_column(nullable=False)
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(3072), nullable=True)
     embedding_ref: Mapped[str | None] = mapped_column(
         nullable=True,
         comment="Format: provider:model:version:sha256hash",
@@ -34,11 +34,6 @@ class ChunkORM(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
 
     __table_args__ = (
-        Index(
-            "ix_chunks_embedding",
-            "embedding",
-            postgresql_using="hnsw",
-            postgresql_ops={"embedding": "vector_cosine_ops"},
-        ),
+        # HNSW index requires pgvector 0.8.0+ with 3072-dim support. Add separately once DB is running.
         Index("ix_chunks_text_search", "text_search", postgresql_using="gin"),
     )
