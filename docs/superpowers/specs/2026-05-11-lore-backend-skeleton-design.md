@@ -167,7 +167,9 @@ class Chunk:
     id: UUID
     document_version_id: UUID
     text: str
-    embedding_ref: str | None   # e.g. "openai:text-embedding-3-large:<sha256>"
+    embedding_ref: str | None   # format: "provider:model:version:sha256hash"
+                               # e.g. "openai:text-embedding-3-large:v1:abc123"
+                               # structured to support multi-vector and versioned embeddings
     metadata: dict[str, Any]
     created_at: datetime
 ```
@@ -398,11 +400,12 @@ services:
 
 1. **Schema never imports SQLAlchemy.** `lore/schema/` contains only Python stdlib + dataclasses/Pydantic.
 2. **Behavioral slices never touch ORM directly.** All DB access goes through `infrastructure/db/repositories/`.
-3. **Repositories are dumb.** No fusion, ranking, or retrieval intelligence in repositories.
+3. **Repositories expose optimized query primitives, not intelligence.** No fusion, ranking, or retrieval scoring in repositories. Repositories may expose efficient query methods (pre-filtering, combined index queries) — but fusion logic, reranking, and hybrid search live in `retrieval/service.py`.
 4. **Intelligence lives in service.py.** Each behavioral module has a `service.py` as its orchestration layer.
-5. **Domain logic lives in `domain/`.** Normalization, business rules, and knowledge transformation are not in schema or infrastructure.
-6. **Embedding vectors are an infrastructure concern.** `schema/chunk.py` holds `embedding_ref: str | None`. The `Vector(3072)` column exists only in `infrastructure/db/models/chunk.py`.
+5. **Domain defines transformations, never structures.** `domain/` contains only functions that transform schema objects. It never defines new data structures. Schema never encodes implicit rules or logic.
+6. **Embedding vectors are an infrastructure concern.** `schema/chunk.py` holds `embedding_ref: str | None` in structured format `"provider:model:version:hash"`. The `Vector(3072)` column exists only in `infrastructure/db/models/chunk.py`.
 7. **Source type is a soft constraint.** `source_type_raw` preserves the verbatim input. `source_type_canonical` holds the normalized value. The DB column is `TEXT`, not an enum.
+8. **Integration tests verify system correctness, not just DB wiring.** As the system evolves, integration tests must cover: chunking determinism, ingestion idempotency, retrieval ranking stability, and provenance correctness — not just that the DB connection works.
 
 ---
 
