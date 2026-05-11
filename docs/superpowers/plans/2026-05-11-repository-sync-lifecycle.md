@@ -44,7 +44,10 @@ If the listing shows a different last migration, adjust `revision` and `down_rev
 
 - [ ] **Step 2: Write migration file**
 
-Create `migrations/versions/0003_repository_sync_runs.py` (adjust filename if Step 1 showed a different last revision):
+Create `migrations/versions/0003_repository_sync_runs.py`.
+
+> **If the current Alembic head is NOT `0002`, do not use the code below literally.**
+> Update the filename, `revision`, `down_revision`, and the docstring to match the actual head before writing.
 
 ```python
 # migrations/versions/0003_repository_sync_runs.py
@@ -1038,6 +1041,7 @@ async def test_e_failed_sync_marks_run_as_failed(
         select(RepositorySyncRunORM)
         .where(RepositorySyncRunORM.repository_id == repo_id)
         .where(RepositorySyncRunORM.status == "failed")
+        .order_by(RepositorySyncRunORM.created_at.desc(), RepositorySyncRunORM.id.desc())
         .limit(1)
     )
     run = result.scalar_one_or_none()
@@ -1378,13 +1382,13 @@ make lint 2>&1 | tail -20
 
 Expected: No errors.
 
-- [ ] **Step 4: Run formatter check**
+- [ ] **Step 4: Run formatter**
 
 ```bash
 make format 2>&1 | tail -10
 ```
 
-Expected: No diffs (or reformat if needed, then re-run lint).
+If `make format` changes any files, review the diff and commit the formatting changes before proceeding.
 
 - [ ] **Step 5: Run type checker**
 
