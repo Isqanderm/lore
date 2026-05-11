@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,8 +37,10 @@ class ExternalObjectORM(Base):
     raw_payload_hash: Mapped[str] = mapped_column(nullable=False)
     content: Mapped[str | None] = mapped_column(nullable=True)
     content_hash: Mapped[str | None] = mapped_column(nullable=True)
-    source_updated_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    fetched_at: Mapped[datetime] = mapped_column(nullable=False)
+    source_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default="{}"
     )
