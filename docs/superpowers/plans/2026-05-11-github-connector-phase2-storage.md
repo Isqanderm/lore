@@ -406,6 +406,11 @@ pytest tests/unit/test_orm_external_models.py -v
 ```
 Expected: `ModuleNotFoundError`
 
+> **`metadata` naming note:** `DeclarativeBase` has a class-level `metadata` attribute
+> (`MetaData()` instance). Defining a column named `metadata` can shadow it.
+> Use `metadata_` as the Python attribute name and map it to DB column `"metadata"` via
+> `mapped_column("metadata", JSONB, ...)`. Repositories map `orm.metadata_` → `schema.metadata`.
+
 - [ ] **Step 3: Implement ExternalConnectionORM**
 
 ```python
@@ -429,9 +434,7 @@ class ExternalConnectionORM(Base):
     auth_mode: Mapped[str] = mapped_column(nullable=False)
     external_account_id: Mapped[str | None] = mapped_column(nullable=True)
     installation_id: Mapped[str | None] = mapped_column(nullable=True)
-    metadata: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now(), nullable=False
@@ -468,9 +471,7 @@ class ExternalRepositoryORM(Base):
     html_url: Mapped[str] = mapped_column(nullable=False)
     visibility: Mapped[str | None] = mapped_column(nullable=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    metadata: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now(), nullable=False
@@ -522,9 +523,7 @@ class ExternalObjectORM(Base):
     content_hash: Mapped[str | None] = mapped_column(nullable=True)
     source_updated_at: Mapped[datetime | None] = mapped_column(nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(nullable=False)
-    metadata: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
 ```
 
 - [ ] **Step 6: Run unit tests**
@@ -551,153 +550,82 @@ git commit -m "feat(db): ExternalConnection, ExternalRepository, ExternalObject 
 - Modify: `lore/schema/source.py`
 - Modify: `lore/schema/document.py`
 
-- [ ] **Step 1: Update SourceORM (add external_object_id)**
+> **CRITICAL: Do NOT replace these files wholesale.**
+> Read the current content first. Apply only the minimal additive diff listed below.
+> Preserve all existing columns, indexes, relationships, helper methods, and repository behavior.
+
+> **SQLAlchemy `metadata` attribute conflict:**
+> `DeclarativeBase` exposes a class-level `metadata` attribute (the `MetaData()` instance).
+> Adding a column named `metadata` on a model *can* shadow it. Use `metadata_` as the Python
+> attribute name and map it to the `"metadata"` DB column with `mapped_column("metadata", JSONB, ...)`.
+> In schema dataclasses and repositories keep the user-facing name as `metadata`.
+
+- [ ] **Step 1: Inspect and minimally update SourceORM**
+
+Read `lore/infrastructure/db/models/source.py`. Then add **only** this attribute (do not remove anything):
 
 ```python
-# lore/infrastructure/db/models/source.py
-from datetime import datetime
-from uuid import UUID, uuid4
-
-from sqlalchemy import DateTime, ForeignKey, func
-from sqlalchemy.orm import Mapped, mapped_column
-
-from lore.infrastructure.db.base import Base
-
-
-class SourceORM(Base):
-    __tablename__ = "sources"
-
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    source_type_raw: Mapped[str] = mapped_column(nullable=False)
-    source_type_canonical: Mapped[str] = mapped_column(nullable=False, index=True)
-    origin: Mapped[str] = mapped_column(nullable=False)
-    external_object_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("external_objects.id"), nullable=True, index=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
+# Add inside SourceORM class, after the existing columns:
+external_object_id: Mapped[UUID | None] = mapped_column(
+    ForeignKey("external_objects.id"), nullable=True, index=True
+)
 ```
 
-- [ ] **Step 2: Update DocumentORM (add document_kind, logical_path, metadata)**
+Required import additions (only if not already present):
+```python
+from sqlalchemy import ForeignKey
+```
+
+- [ ] **Step 2: Inspect and minimally update DocumentORM + DocumentVersionORM**
+
+Read `lore/infrastructure/db/models/document.py`. Then add **only** these attributes:
 
 ```python
-# lore/infrastructure/db/models/document.py
-from datetime import datetime
-from typing import Any
-from uuid import UUID, uuid4
+# Add inside DocumentORM class, after existing columns:
+document_kind: Mapped[str | None] = mapped_column(nullable=True, index=True)
+logical_path: Mapped[str | None] = mapped_column(nullable=True, index=True)
+metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
 
-from sqlalchemy import ForeignKey, func
+# Add inside DocumentVersionORM class, after existing columns:
+version_ref: Mapped[str | None] = mapped_column(nullable=True, index=True)
+source_updated_at: Mapped[datetime | None] = mapped_column(nullable=True)
+metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
+```
+
+Required import additions (only if not already present):
+```python
+from typing import Any
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
-
-from lore.infrastructure.db.base import Base
-
-
-class DocumentORM(Base):
-    __tablename__ = "documents"
-
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    source_id: Mapped[UUID] = mapped_column(ForeignKey("sources.id"), nullable=False, index=True)
-    title: Mapped[str] = mapped_column(nullable=False)
-    path: Mapped[str] = mapped_column(nullable=False)
-    document_kind: Mapped[str | None] = mapped_column(nullable=True, index=True)
-    logical_path: Mapped[str | None] = mapped_column(nullable=True, index=True)
-    metadata: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), onupdate=func.now(), nullable=False
-    )
-
-
-class DocumentVersionORM(Base):
-    __tablename__ = "document_versions"
-
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    document_id: Mapped[UUID] = mapped_column(
-        ForeignKey("documents.id"), nullable=False, index=True
-    )
-    version: Mapped[int] = mapped_column(nullable=False)
-    content: Mapped[str] = mapped_column(nullable=False)
-    checksum: Mapped[str] = mapped_column(nullable=False, index=True)
-    version_ref: Mapped[str | None] = mapped_column(nullable=True, index=True)
-    source_updated_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    metadata: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
 ```
 
-- [ ] **Step 3: Update lore/schema/source.py**
+- [ ] **Step 3: Update lore/schema/source.py — additive only**
+
+Read `lore/schema/source.py`. Add `external_object_id` as an optional field to `Source` (if not already present):
 
 ```python
-# lore/schema/source.py
-from dataclasses import dataclass
-from datetime import datetime
-from enum import StrEnum
-from uuid import UUID
-
-
-class SourceType(StrEnum):
-    GIT_REPO = "git_repo"
-    MARKDOWN = "markdown"
-    ADR = "adr"
-    SLACK = "slack"
-    CONFLUENCE = "confluence"
-    UNKNOWN = "unknown"
-
-
-@dataclass(frozen=True)
-class Source:
-    id: UUID
-    source_type_raw: str
-    source_type_canonical: SourceType
-    origin: str
-    created_at: datetime
-    updated_at: datetime
-    external_object_id: UUID | None = None
+# In the Source dataclass, add after existing fields:
+external_object_id: UUID | None = None
 ```
 
-- [ ] **Step 4: Update lore/schema/document.py**
+Do not remove or rename any existing fields.
+
+- [ ] **Step 4: Update lore/schema/document.py — additive only**
+
+Read `lore/schema/document.py`. Add new optional fields to `Document` and `DocumentVersion` (if not already present):
 
 ```python
-# lore/schema/document.py
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any
-from uuid import UUID
+# In Document dataclass, add after existing fields:
+document_kind: str | None = None
+logical_path: str | None = None
+metadata: dict[str, Any] = field(default_factory=dict)
 
-
-@dataclass(frozen=True)
-class Document:
-    id: UUID
-    source_id: UUID
-    title: str
-    path: str
-    created_at: datetime
-    updated_at: datetime
-    document_kind: str | None = None
-    logical_path: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class DocumentVersion:
-    id: UUID
-    document_id: UUID
-    version: int
-    content: str
-    checksum: str
-    created_at: datetime
-    version_ref: str | None = None
-    source_updated_at: datetime | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+# In DocumentVersion dataclass, add after existing fields:
+version_ref: str | None = None
+source_updated_at: datetime | None = None
+metadata: dict[str, Any] = field(default_factory=dict)
 ```
+
+Do not remove or rename any existing fields. Add `from typing import Any` and `from dataclasses import field` if not already present.
 
 - [ ] **Step 5: Run existing unit tests to confirm no regressions**
 
@@ -761,7 +689,7 @@ def _orm_to_schema(orm: ExternalConnectionORM) -> ExternalConnection:
         auth_mode=orm.auth_mode,
         external_account_id=orm.external_account_id,
         installation_id=orm.installation_id,
-        metadata=orm.metadata,
+        metadata=orm.metadata_,
         created_at=orm.created_at,
         updated_at=orm.updated_at,
     )
@@ -784,7 +712,7 @@ class ExternalConnectionRepository(BaseRepository[ExternalConnectionORM]):
                 auth_mode="env_pat",
                 external_account_id=None,
                 installation_id=None,
-                metadata={"token_source": "env", "configured": True},
+                metadata_={"token_source": "env", "configured": True},
             )
             self.session.add(orm)
             await self.session.flush()
@@ -845,7 +773,7 @@ def _orm_to_schema(orm: ExternalRepositoryORM) -> ExternalRepository:
         html_url=orm.html_url,
         visibility=orm.visibility,
         last_synced_at=orm.last_synced_at,
-        metadata=orm.metadata,
+        metadata=orm.metadata_,
         created_at=orm.created_at,
         updated_at=orm.updated_at,
     )
@@ -877,7 +805,7 @@ class ExternalRepositoryRepository(BaseRepository[ExternalRepositoryORM]):
                 html_url=draft.html_url,
                 visibility=draft.visibility,
                 last_synced_at=None,
-                metadata=draft.metadata,
+                metadata_=draft.metadata,
             )
             self.session.add(orm)
             await self.session.flush()
@@ -954,7 +882,7 @@ class ExternalObjectRepository(BaseRepository[ExternalObjectORM]):
                 content_hash=raw.content_hash,
                 source_updated_at=raw.source_updated_at,
                 fetched_at=raw.fetched_at,
-                metadata=raw.metadata,
+                metadata_=raw.metadata,
             )
             .on_conflict_do_update(
                 constraint="uq_external_objects_connection_provider_id",
@@ -989,7 +917,7 @@ class ExternalObjectRepository(BaseRepository[ExternalObjectORM]):
             content_hash=orm.content_hash,
             source_updated_at=orm.source_updated_at,
             fetched_at=orm.fetched_at,
-            metadata=orm.metadata,
+            metadata=orm.metadata_,
         )
 ```
 
@@ -1057,7 +985,7 @@ def _doc_orm_to_schema(orm: DocumentORM) -> Document:
         updated_at=orm.updated_at,
         document_kind=orm.document_kind,
         logical_path=orm.logical_path,
-        metadata=orm.metadata,
+        metadata=orm.metadata_,
     )
 
 # add to _dv_orm_to_schema:
@@ -1071,7 +999,7 @@ def _dv_orm_to_schema(orm: DocumentVersionORM) -> DocumentVersion:
         created_at=orm.created_at,
         version_ref=orm.version_ref,
         source_updated_at=orm.source_updated_at,
-        metadata=orm.metadata,
+        metadata=orm.metadata_,
     )
 
 # add to DocumentRepository class:
@@ -1079,15 +1007,24 @@ def _dv_orm_to_schema(orm: DocumentVersionORM) -> DocumentVersion:
         self,
         source_id: UUID,
         document_kind: str,
-        logical_path: str,
+        logical_path: str | None,
     ) -> Document | None:
-        result = await self.session.execute(
-            select(DocumentORM).where(
-                DocumentORM.source_id == source_id,
-                DocumentORM.document_kind == document_kind,
-                DocumentORM.logical_path == logical_path,
+        if logical_path is None:
+            result = await self.session.execute(
+                select(DocumentORM).where(
+                    DocumentORM.source_id == source_id,
+                    DocumentORM.document_kind == document_kind,
+                    DocumentORM.logical_path.is_(None),
+                )
             )
-        )
+        else:
+            result = await self.session.execute(
+                select(DocumentORM).where(
+                    DocumentORM.source_id == source_id,
+                    DocumentORM.document_kind == document_kind,
+                    DocumentORM.logical_path == logical_path,
+                )
+            )
         orm = result.scalar_one_or_none()
         return _doc_orm_to_schema(orm) if orm else None
 
@@ -1123,7 +1060,7 @@ Also update `DocumentRepository.create` to pass new fields:
             path=doc.path,
             document_kind=doc.document_kind,
             logical_path=doc.logical_path,
-            metadata=doc.metadata,
+            metadata_=doc.metadata,
             created_at=doc.created_at,
             updated_at=doc.updated_at,
         )
@@ -1144,7 +1081,7 @@ And `DocumentVersionRepository.create`:
             checksum=dv.checksum,
             version_ref=dv.version_ref,
             source_updated_at=dv.source_updated_at,
-            metadata=dv.metadata,
+            metadata_=dv.metadata,
             created_at=dv.created_at,
         )
         self.session.add(orm)

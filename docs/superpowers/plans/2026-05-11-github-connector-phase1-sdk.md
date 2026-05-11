@@ -79,7 +79,7 @@ def test_capabilities_frozen() -> None:
         supports_comments=False,
         supports_releases=False,
         supports_permissions=False,
-        object_types=["github.repository", "github.file"],
+        object_types=("github.repository", "github.file"),
     )
     with pytest.raises(AttributeError):
         caps.supports_full_sync = False  # type: ignore[misc]
@@ -97,7 +97,7 @@ def test_manifest_frozen() -> None:
         supports_comments=False,
         supports_releases=False,
         supports_permissions=False,
-        object_types=["github.file"],
+        object_types=("github.file",),
     )
     m = ConnectorManifest(
         connector_id="github",
@@ -170,7 +170,7 @@ class ConnectorCapabilities:
     supports_comments: bool
     supports_releases: bool
     supports_permissions: bool
-    object_types: list[str]
+    object_types: tuple[str, ...]
 ```
 
 - [ ] **Step 5: Implement manifest.py**
@@ -339,7 +339,7 @@ def _make_caps(**overrides: bool) -> ConnectorCapabilities:
         supports_comments=False,
         supports_releases=False,
         supports_permissions=False,
-        object_types=[],
+        object_types=(),
     )
     defaults.update(overrides)  # type: ignore[arg-type]
     return ConnectorCapabilities(**defaults)  # type: ignore[arg-type]

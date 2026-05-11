@@ -86,6 +86,16 @@ def test_parse_invalid_url_raises() -> None:
 def test_parse_missing_repo_raises() -> None:
     with pytest.raises(ValueError, match="Cannot parse GitHub URL"):
         parse_github_url("https://github.com/Isqanderm")
+
+
+def test_parse_blob_url_raises() -> None:
+    with pytest.raises(ValueError, match="Cannot parse GitHub URL"):
+        parse_github_url("https://github.com/Isqanderm/lore/blob/main/README.md")
+
+
+def test_parse_tree_url_raises() -> None:
+    with pytest.raises(ValueError, match="Cannot parse GitHub URL"):
+        parse_github_url("https://github.com/Isqanderm/lore/tree/main")
 ```
 
 - [ ] **Step 2: Run to confirm failure**
@@ -163,12 +173,20 @@ _SSH_RE = re.compile(
 
 
 def parse_github_url(url: str) -> tuple[str, str]:
-    """Return (owner, repo) from a GitHub HTTPS or SSH URL."""
+    """Return (owner, repo) from a GitHub HTTPS or SSH URL.
+
+    MVP: repository root URLs only. Blob/tree URLs (e.g. /blob/main/README.md,
+    /tree/main) are not supported — raise ValueError with a clear message.
+    """
     for pattern in (_HTTPS_RE, _SSH_RE):
         m = pattern.match(url.strip())
         if m:
             return m.group("owner"), m.group("repo")
-    raise ValueError(f"Cannot parse GitHub URL: {url!r}")
+    raise ValueError(
+        f"Cannot parse GitHub URL: {url!r}. "
+        "Provide a repository root URL (e.g. https://github.com/owner/repo). "
+        "Blob/tree/commit URLs are not supported in this version."
+    )
 ```
 
 - [ ] **Step 5: Implement auth.py**
@@ -205,7 +223,7 @@ class GitHubAuth:
 ```
 pytest tests/unit/connectors/github/test_url_parser.py -v
 ```
-Expected: 6 PASSED
+Expected: 8 PASSED
 
 - [ ] **Step 7: Commit**
 
@@ -905,7 +923,7 @@ GITHUB_CAPABILITIES = ConnectorCapabilities(
     supports_comments=False,
     supports_releases=False,
     supports_permissions=False,
-    object_types=["github.repository", "github.file"],
+    object_types=("github.repository", "github.file"),
 )
 
 GITHUB_MANIFEST = ConnectorManifest(
@@ -948,7 +966,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from lore.connector_sdk.base import BaseConnector
-from lore.connector_sdk.errors import UnsupportedCapabilityError
+from lore.connector_sdk.errors import ConnectorError, UnsupportedCapabilityError
 from lore.connector_sdk.manifest import ConnectorManifest
 from lore.connector_sdk.models import (
     CanonicalDocumentDraft,
@@ -1015,11 +1033,14 @@ class GitHubConnector(BaseConnector):
 
         selected = self._file_policy.filter(tree.entries)
         file_raws: list[RawExternalObject] = []
+        warnings: list[str] = []
         for entry in selected:
             try:
                 content = await self._client.get_file_content(owner, repo, entry.path, head_sha)
-            except Exception:
-                continue  # skip unreadable files, don't fail the entire sync
+            except ConnectorError as exc:
+                warnings.append(f"Skipped {entry.path}: {exc}")
+                continue
+            # Unexpected exceptions propagate — do not swallow them silently.
             file_raws.append(
                 self._build_file_raw(entry, content, request, owner, repo, branch, head_sha)
             )
@@ -1027,6 +1048,7 @@ class GitHubConnector(BaseConnector):
         return SyncResult(
             connector_id="github",
             raw_objects=[repo_raw, *file_raws],
+            warnings=warnings,
         )
 
     def normalize(self, raw: RawExternalObject) -> list[CanonicalDocumentDraft]:

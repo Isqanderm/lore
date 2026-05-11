@@ -25,8 +25,8 @@
 | Create | `tests/integration/connectors/__init__.py` | test package |
 | Create | `tests/integration/connectors/test_repository_import_flow.py` | full DB flow test |
 | Create | `tests/integration/connectors/test_ingest_idempotency_db.py` | DB idempotency test |
-| Create | `tests/e2e/test_import_endpoint.py` | API endpoint test |
-| Create | `tests/e2e/test_connectors_endpoint.py` | connectors list test |
+| Create | `tests/integration/connectors/test_import_api.py` | POST /import integration test (needs DB) |
+| Create | `tests/e2e/test_connectors_endpoint.py` | GET /connectors E2E test (no DB) |
 | Create | `tests/smoke/__init__.py` | smoke test package |
 | Create | `tests/smoke/test_github_live_import.py` | opt-in live GitHub test |
 | Modify | `CLAUDE.md` | connector SDK section |
@@ -301,9 +301,18 @@ async def get_repository(
 
 - [ ] **Step 6: Update main.py to mount new routers**
 
+> **IMPORTANT: Before modifying main.py, read the current file and check the existing routing pattern.**
+> Do NOT replace the file wholesale. Inspect how routers are currently mounted (APIRouter vs app.mount),
+> preserve existing middleware, exception handlers, and lifespan wiring. Apply only additive changes.
+
+The correct pattern uses `APIRouter` with prefix — **not** a nested `FastAPI()` app.
+Nested `FastAPI()` breaks middleware, exception handlers, OpenAPI, and lifespan.
+
+If `apps/api/main.py` currently mounts routes via `APIRouter`, extend that pattern:
+
 ```python
-# apps/api/main.py
-from fastapi import FastAPI
+# apps/api/main.py  — additive change only, preserve all existing structure
+from fastapi import APIRouter, FastAPI
 
 from apps.api.exception_handlers import lore_exception_handler, unhandled_exception_handler
 from apps.api.lifespan import lifespan
@@ -323,11 +332,12 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Lore", version="0.2.0", lifespan=lifespan)
     app.add_middleware(RequestIDMiddleware)
 
-    v1_router = FastAPI()
-    v1_router.include_router(health_router)
-    v1_router.include_router(connectors_router)
-    v1_router.include_router(repositories_router)
-    app.mount("/api/v1", v1_router)
+    # Use APIRouter with prefix — never mount a nested FastAPI() instance
+    api_v1 = APIRouter(prefix="/api/v1")
+    api_v1.include_router(health_router)
+    api_v1.include_router(connectors_router)
+    api_v1.include_router(repositories_router)
+    app.include_router(api_v1)
 
     app.add_exception_handler(LoreError, lore_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
@@ -336,6 +346,10 @@ def create_app() -> FastAPI:
 
 app = create_app()
 ```
+
+> Verify that the existing `health_router` prefix does not duplicate `/api/v1` — if it already has
+> that prefix, remove the outer `api_v1` wrapper and include routers directly into `app`.
+> The goal is to preserve exactly the existing behaviour while adding two new routers.
 
 - [ ] **Step 7: Verify app starts without error**
 
@@ -436,7 +450,7 @@ class _FakeGitHubConnector(BaseConnector):
                 supports_comments=False,
                 supports_releases=False,
                 supports_permissions=False,
-                object_types=["github.repository", "github.file"],
+                object_types=("github.repository", "github.file"),
             ),
         )
 
@@ -524,7 +538,7 @@ async def test_full_import_creates_document_version_with_provenance(db_session: 
     res = await db_session.execute(select(DocumentVersionORM))
     versions = res.scalars().all()
     assert len(versions) >= 1
-    meta = versions[-1].metadata
+    meta = versions[-1].metadata_  # ORM attribute is metadata_, DB column is "metadata"
     assert "commit_sha" in meta
     assert meta["commit_sha"] == "abc123"
     assert "external_id" in meta
@@ -605,7 +619,7 @@ class _StaticConnector(BaseConnector):
                 supports_files=True, supports_issues=False,
                 supports_pull_requests=False, supports_comments=False,
                 supports_releases=False, supports_permissions=False,
-                object_types=["github.file"],
+                object_types=("github.file",),
             ),
         )
 
@@ -681,22 +695,70 @@ git commit -m "test(integration): full import flow and DB-level idempotency test
 ## Task 17: E2E tests
 
 **Files:**
-- Create: `tests/e2e/test_import_endpoint.py`
-- Create: `tests/e2e/test_connectors_endpoint.py`
+- Create: `tests/integration/connectors/test_import_api.py` — POST /import needs DB; belongs in integration
+- Create: `tests/e2e/test_connectors_endpoint.py` — GET /connectors needs no DB; true E2E
 
-These tests use FastAPI `AsyncClient` with a fake connector in `app.state`. No real GitHub calls.
+> **Why test_import_endpoint is integration, not E2E:**
+> POST /repositories/import calls `RepositoryImportService` which writes to DB.
+> The existing E2E `client` fixture creates the FastAPI app without a DB session override.
+> Running it as E2E without DB wiring produces a broken, non-deterministic test.
+> Move it to integration where `db_session` is available and inject it via `app.dependency_overrides`.
 
-- [ ] **Step 1: Write E2E tests**
+- [ ] **Step 1: Add `app_with_db` and `app_client_with_db` fixtures to `tests/integration/conftest.py`**
+
+These fixtures are required for the POST /repositories/import integration API test.
+
+> **httpx `app=` param:** In httpx ≥ 0.20 the recommended way to test ASGI apps is
+> `ASGITransport(app=app)`, not the deprecated `app=app` shortcut. Since the project uses
+> `httpx>=0.27.0`, always use `ASGITransport`.
+
+Read `tests/integration/conftest.py` first; add only these two fixtures (do not remove existing fixtures).
+
+Required imports to add if not already present:
+```python
+from collections.abc import AsyncGenerator
+import httpx
+from fastapi import FastAPI
+from apps.api.main import create_app
+from lore.infrastructure.db.session import get_session
+```
+
+Fixtures to add:
+```python
+@pytest.fixture
+async def app_with_db(db_session: AsyncSession) -> AsyncGenerator[FastAPI, None]:
+    """FastAPI app with DB session injected via dependency_overrides."""
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: db_session
+    yield app
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def app_client_with_db(
+    app_with_db: FastAPI,
+) -> AsyncGenerator[httpx.AsyncClient, None]:
+    """AsyncClient backed by the test app. Use app_with_db to set app.state."""
+    transport = httpx.ASGITransport(app=app_with_db)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+```
+
+> Tests set `app_with_db.state.connector_registry = fake_registry` directly (not via the client).
+> See Step 2 below for the correct usage pattern.
+
+- [ ] **Step 2: Write import API integration test**
 
 ```python
-# tests/e2e/test_import_endpoint.py
-"""POST /api/v1/repositories/import with a fake connector."""
+# tests/integration/connectors/test_import_api.py
+"""POST /api/v1/repositories/import with a fake connector — integration level (needs DB)."""
 import hashlib
 import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from fastapi import FastAPI
 from httpx import AsyncClient
 
 from lore.connector_sdk.base import BaseConnector
@@ -726,7 +788,7 @@ class _FakeConnector(BaseConnector):
                 supports_files=True, supports_issues=False,
                 supports_pull_requests=False, supports_comments=False,
                 supports_releases=False, supports_permissions=False,
-                object_types=["github.file"],
+                object_types=("github.file",),
             ),
         )
 
@@ -770,11 +832,16 @@ def fake_registry() -> ConnectorRegistry:
     return registry
 
 
-@pytest.mark.e2e
-async def test_import_endpoint_returns_200(client: AsyncClient, fake_registry: ConnectorRegistry) -> None:
-    client.app.state.connector_registry = fake_registry  # type: ignore[attr-defined]
+@pytest.mark.integration
+async def test_import_endpoint_returns_200(
+    app_with_db: FastAPI,
+    app_client_with_db: AsyncClient,
+    fake_registry: ConnectorRegistry,
+) -> None:
+    """POST /import needs DB — run as integration test, not E2E."""
+    app_with_db.state.connector_registry = fake_registry
 
-    response = await client.post(
+    response = await app_client_with_db.post(
         "/api/v1/repositories/import",
         json={"url": "https://github.com/acme/repo", "connector_id": "fake"},
     )
@@ -785,17 +852,21 @@ async def test_import_endpoint_returns_200(client: AsyncClient, fake_registry: C
     assert data["connector_id"] == "fake"
 
 
-@pytest.mark.e2e
+@pytest.mark.integration
 async def test_import_endpoint_unknown_connector_returns_404(
-    client: AsyncClient, fake_registry: ConnectorRegistry
+    app_with_db: FastAPI,
+    app_client_with_db: AsyncClient,
+    fake_registry: ConnectorRegistry,
 ) -> None:
-    client.app.state.connector_registry = fake_registry  # type: ignore[attr-defined]
+    app_with_db.state.connector_registry = fake_registry
 
-    response = await client.post(
+    response = await app_client_with_db.post(
         "/api/v1/repositories/import",
         json={"url": "https://github.com/acme/repo", "connector_id": "unknown"},
     )
     assert response.status_code == 404
+
+
 ```
 
 ```python
@@ -804,17 +875,10 @@ async def test_import_endpoint_unknown_connector_returns_404(
 import pytest
 from httpx import AsyncClient
 
-from lore.connector_sdk.capabilities import ConnectorCapabilities
+from lore.connector_sdk.base import BaseConnector
 from lore.connector_sdk.manifest import ConnectorManifest
 from lore.connector_sdk.registry import ConnectorRegistry
-from lore.connectors.github.connector import GitHubConnector
 from lore.connectors.github.manifest import GITHUB_MANIFEST
-
-
-class _MinimalConnector:
-    @property
-    def manifest(self) -> ConnectorManifest:
-        return GITHUB_MANIFEST
 
 
 @pytest.fixture
@@ -864,28 +928,27 @@ async def test_webhook_endpoint_returns_501(client: AsyncClient) -> None:
     assert response.status_code == 501
 ```
 
-- [ ] **Step 2: Run E2E tests**
+- [ ] **Step 2: Run tests**
 
-Note: E2E tests need a DB. The existing `client` fixture in `tests/e2e/conftest.py` creates the app without DB-backed storage. For the import test to work end-to-end, the E2E conftest needs a DB session too. If the existing E2E conftest does not wire DB, the import endpoint test will fail at DB access.
+E2E (GET /connectors only — no DB, no GITHUB_TOKEN required):
 
-Check `tests/e2e/conftest.py` — if it only creates the FastAPI app without DB, the import test needs to mock the session. In the simplest approach: skip the DB-dependent import test in E2E and use integration tests for full DB flow.
-
-Alternative: use `app.dependency_overrides` to inject a real DB session in E2E. This requires the E2E conftest to also start testcontainers.
-
-**Recommended approach for MVP:** Run the connectors-endpoint test as true E2E (no DB needed). For the import endpoint test, mark it `@pytest.mark.integration` instead of `@pytest.mark.e2e` since it needs DB.
-
-- [ ] **Step 3: Run E2E tests**
-
-```
+```bash
 pytest tests/e2e/ -v -m e2e
 ```
-Expected: connectors tests pass; import test may need DB fixture integration
+Expected: 3 PASSED (connectors list, empty registry, webhook 501)
+
+Import endpoint integration test (needs testcontainers DB):
+
+```bash
+pytest tests/integration/connectors/test_import_api.py -v -m integration
+```
+Expected: 2 PASSED
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add tests/e2e/test_import_endpoint.py tests/e2e/test_connectors_endpoint.py
-git commit -m "test(e2e): connectors list and import endpoint tests"
+git add tests/integration/connectors/test_import_api.py tests/e2e/test_connectors_endpoint.py
+git commit -m "test(e2e,integration): connectors list E2E + import endpoint integration tests"
 ```
 
 ---
@@ -915,28 +978,29 @@ Run with:
 Never run in CI.
 """
 import os
+from collections.abc import AsyncGenerator
 
 import pytest
 
 from lore.connector_sdk.models import FullSyncRequest
-from lore.connectors.github.auth import GitHubAuth
 from lore.connectors.github.client import GitHubClient
 from lore.connectors.github.connector import GitHubConnector
 from lore.connectors.github.file_policy import FileSelectionPolicy
-from lore.connectors.github.models import parse_github_url
 from lore.connectors.github.normalizer import GitHubNormalizer
 from lore.infrastructure.config import get_settings
 
 
 @pytest.fixture
-def live_connector() -> GitHubConnector:
+async def live_connector() -> AsyncGenerator[GitHubConnector, None]:
     settings = get_settings()
     client = GitHubClient.from_settings(settings)
-    return GitHubConnector(
+    connector = GitHubConnector(
         client=client,
         file_policy=FileSelectionPolicy(),
         normalizer=GitHubNormalizer(),
     )
+    yield connector
+    await client.close()
 
 
 @pytest.mark.live_github

@@ -24,6 +24,46 @@ Implement in order. Each phase is self-contained and ends with working, tested c
 
 ---
 
+## Execution constraints
+
+These rules apply throughout all phases. Claude must follow them even when the phase plan does not repeat them.
+
+**Before modifying existing files:**
+- Read the current file first
+- Apply minimal additive changes only — do not replace entire files
+- Preserve existing columns, relationships, indexes, helper methods, and repository behaviour
+
+**ORM `metadata` attribute:**
+- Never use `metadata` as a Python attribute name on SQLAlchemy ORM models — it shadows `DeclarativeBase.metadata`
+- Use `metadata_: Mapped[...] = mapped_column("metadata", JSONB, ...)` in ORM models
+- Map `orm.metadata_` → `schema.metadata` in `_orm_to_schema` functions
+- Schema dataclasses and the user-facing API keep the name `metadata`
+
+**Provider boundary:**
+- Production code outside `apps/api/lifespan.py` must NOT import `lore.connectors.github`
+- Unit tests for `IngestionService` must NOT import `GitHubNormalizer` — use `FakeStubConnector` only
+- Integration tests may use `GitHubNormalizer` inside fake connectors
+
+**`logical_path` nullability:**
+- Never coerce `logical_path = None` to `""` — pass `None` as-is to repository methods
+- Repository `get_by_source_kind_path` must query `IS NULL` when `logical_path is None`
+
+**FastAPI routing:**
+- Use `APIRouter(prefix="/api/v1")` + `app.include_router(...)` — never mount a nested `FastAPI()` instance
+- Inspect `apps/api/main.py` before modifying; preserve middleware and exception handlers
+
+**Error handling in connectors:**
+- Catch `ConnectorError` specifically for expected failures (binary files, 404)
+- Append skipped-file warnings to `SyncResult.warnings`
+- Do not swallow unexpected exceptions with bare `except Exception: continue`
+
+**Testing:**
+- Default test suite must not require `GITHUB_TOKEN`
+- `POST /repositories/import` API test belongs in `tests/integration/` (needs DB), not `tests/e2e/`
+- `GET /connectors` API test is true E2E (no DB required)
+
+---
+
 ## Key invariants enforced throughout
 
 1. `lore/connectors/github/` can be deleted — `lore.schema`, `lore.connector_sdk`, `lore.ingestion` imports must not break

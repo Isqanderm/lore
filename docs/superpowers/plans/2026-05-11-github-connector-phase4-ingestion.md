@@ -55,7 +55,6 @@ from lore.connector_sdk.models import (
     RawExternalObject,
     SyncResult,
 )
-from lore.connectors.github.normalizer import GitHubNormalizer
 from lore.ingestion.service import IngestionService
 from tests.unit.ingestion._fakes import (
     FakeExternalObjectRepository,
@@ -64,6 +63,7 @@ from tests.unit.ingestion._fakes import (
     FakeDocumentVersionRepository,
     FakeStubConnector,
 )
+# NOTE: No import from lore.connectors.github — ingestion unit tests must be provider-agnostic.
 
 
 def _raw_file(path: str, content: str, conn_id: UUID, repo_id: UUID) -> RawExternalObject:
@@ -96,7 +96,7 @@ async def test_same_content_no_duplicate_version() -> None:
     source_repo = FakeSourceRepository()
     doc_repo = FakeDocumentRepository()
     dv_repo = FakeDocumentVersionRepository()
-    connector = FakeStubConnector(normalizer=GitHubNormalizer())
+    connector = FakeStubConnector()
 
     svc = IngestionService(ext_obj_repo, source_repo, doc_repo, dv_repo)
 
@@ -119,7 +119,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from lore.connector_sdk.models import RawExternalObject, SyncResult
-from lore.connectors.github.normalizer import GitHubNormalizer
 from lore.ingestion.service import IngestionService
 from tests.unit.ingestion._fakes import (
     FakeExternalObjectRepository,
@@ -128,6 +127,7 @@ from tests.unit.ingestion._fakes import (
     FakeDocumentVersionRepository,
     FakeStubConnector,
 )
+# NOTE: No import from lore.connectors.github — ingestion unit tests must be provider-agnostic.
 
 
 def _raw_file(path: str, content: str, conn_id, repo_id) -> RawExternalObject:
@@ -161,7 +161,7 @@ async def test_changed_content_creates_new_version() -> None:
     source_repo = FakeSourceRepository()
     doc_repo = FakeDocumentRepository()
     dv_repo = FakeDocumentVersionRepository()
-    connector = FakeStubConnector(normalizer=GitHubNormalizer())
+    connector = FakeStubConnector()
 
     svc = IngestionService(ext_obj_repo, source_repo, doc_repo, dv_repo)
 
@@ -185,7 +185,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from lore.connector_sdk.models import RawExternalObject, SyncResult
-from lore.connectors.github.normalizer import GitHubNormalizer
 from lore.ingestion.service import IngestionService
 from tests.unit.ingestion._fakes import (
     FakeExternalObjectRepository,
@@ -194,6 +193,7 @@ from tests.unit.ingestion._fakes import (
     FakeDocumentVersionRepository,
     FakeStubConnector,
 )
+# NOTE: No import from lore.connectors.github — ingestion unit tests must be provider-agnostic.
 
 
 async def test_version_metadata_contains_provenance_snapshot() -> None:
@@ -230,7 +230,7 @@ async def test_version_metadata_contains_provenance_snapshot() -> None:
     source_repo = FakeSourceRepository()
     doc_repo = FakeDocumentRepository()
     dv_repo = FakeDocumentVersionRepository()
-    connector = FakeStubConnector(normalizer=GitHubNormalizer())
+    connector = FakeStubConnector()
 
     svc = IngestionService(ext_obj_repo, source_repo, doc_repo, dv_repo)
     await svc.ingest_sync_result(SyncResult("stub", [raw]), connector)
@@ -251,17 +251,19 @@ async def test_version_metadata_contains_provenance_snapshot() -> None:
 # tests/unit/ingestion/_fakes.py
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from lore.connector_sdk.base import BaseConnector
+from lore.connector_sdk.capabilities import ConnectorCapabilities
 from lore.connector_sdk.manifest import ConnectorManifest
-from lore.connector_sdk.models import CanonicalDocumentDraft, RawExternalObject
-from lore.connectors.github.normalizer import GitHubNormalizer
-from lore.infrastructure.db.repositories.external_object import ExternalObject
+from lore.connector_sdk.models import CanonicalDocumentDraft, ProvenanceDraft, RawExternalObject
 from lore.schema.document import Document, DocumentVersion
-from lore.schema.source import Source, SourceType
+from lore.schema.source import Source
+
+# NOTE: This file must NOT import from lore.connectors.github.
+# FakeStubConnector produces CanonicalDocumentDraft directly — no provider-specific logic.
 
 
 @dataclass
@@ -338,7 +340,7 @@ class FakeDocumentRepository:
         self.documents: list[Document] = []
 
     async def get_by_source_kind_path(
-        self, source_id: UUID, document_kind: str, logical_path: str
+        self, source_id: UUID, document_kind: str, logical_path: str | None
     ) -> Document | None:
         return next(
             (
@@ -376,12 +378,14 @@ class FakeDocumentVersionRepository:
 
 
 class FakeStubConnector(BaseConnector):
-    def __init__(self, normalizer: GitHubNormalizer) -> None:
-        self._normalizer = normalizer
+    """Stub connector — returns deterministic CanonicalDocumentDraft.
+
+    Does NOT import or use any concrete connector (GitHubNormalizer etc.).
+    Unit tests for IngestionService should use this fake exclusively.
+    """
 
     @property
     def manifest(self) -> ConnectorManifest:
-        from lore.connector_sdk.capabilities import ConnectorCapabilities
         return ConnectorManifest(
             connector_id="stub",
             display_name="Stub",
@@ -397,12 +401,41 @@ class FakeStubConnector(BaseConnector):
                 supports_comments=False,
                 supports_releases=False,
                 supports_permissions=False,
-                object_types=[],
+                object_types=(),
             ),
         )
 
     def normalize(self, raw: RawExternalObject) -> list[CanonicalDocumentDraft]:
-        return self._normalizer.normalize(raw)
+        if raw.content is None:
+            return []
+        path = raw.metadata.get("path", "doc")
+        provenance = ProvenanceDraft(
+            provider=raw.provider,
+            external_id=raw.external_id,
+            external_url=raw.external_url,
+            connection_id=raw.connection_id,
+            repository_id=raw.repository_id,
+            raw_payload_hash=raw.raw_payload_hash,
+        )
+        return [
+            CanonicalDocumentDraft(
+                document_kind="documentation.readme",
+                logical_path=path if path else None,
+                title=path.split("/")[-1] if path else "doc",
+                content=raw.content,
+                content_hash=raw.content_hash or "",
+                version_ref=raw.metadata.get("commit_sha"),
+                source_updated_at=raw.source_updated_at,
+                provenance=provenance,
+                metadata={
+                    "commit_sha": raw.metadata.get("commit_sha"),
+                    "path": path,
+                    "external_id": raw.external_id,
+                    "external_url": raw.external_url,
+                    "raw_payload_hash": raw.raw_payload_hash,
+                },
+            )
+        ]
 ```
 
 - [ ] **Step 3: Run tests to confirm failure**
@@ -519,7 +552,7 @@ class IngestionService:
         doc = await self._doc_repo.get_by_source_kind_path(
             source.id,
             draft.document_kind,
-            draft.logical_path or "",
+            draft.logical_path,  # pass None as-is — repository handles IS NULL correctly
         )
         if doc is None:
             now = datetime.now(UTC)
@@ -528,7 +561,7 @@ class IngestionService:
                     id=uuid4(),
                     source_id=source.id,
                     title=draft.title,
-                    path=draft.logical_path or "",
+                    path=draft.logical_path or draft.provenance.external_id,
                     document_kind=draft.document_kind,
                     logical_path=draft.logical_path,
                     metadata={},
