@@ -30,9 +30,21 @@
 ## Task 1: DB Migration — `repository_sync_runs`
 
 **Files:**
-- Create: `migrations/versions/0003_repository_sync_runs.py`
+- Create: `migrations/versions/<next>_repository_sync_runs.py` — filename and revision determined in Step 1
 
-- [ ] **Step 1: Write migration file**
+- [ ] **Step 1: Verify current migration head before writing the file**
+
+```bash
+ls migrations/versions/
+```
+
+Expected: two files — `0001_initial_schema.py` and `0002_integration_layer.py`.
+If the last file is `0002_…`, the next revision is `0003` and `down_revision = "0002"`.
+If the listing shows a different last migration, adjust `revision` and `down_revision` accordingly in the file below.
+
+- [ ] **Step 2: Write migration file**
+
+Create `migrations/versions/0003_repository_sync_runs.py` (adjust filename if Step 1 showed a different last revision):
 
 ```python
 # migrations/versions/0003_repository_sync_runs.py
@@ -142,16 +154,15 @@ def downgrade() -> None:
     op.drop_table("repository_sync_runs")
 ```
 
-- [ ] **Step 2: Verify migration parses cleanly**
+- [ ] **Step 3: Verify migration parses cleanly**
 
 ```bash
-python -c "from migrations.versions import _0003_repository_sync_runs; print('ok')" 2>/dev/null || \
 python -c "import importlib.util; spec = importlib.util.spec_from_file_location('m', 'migrations/versions/0003_repository_sync_runs.py'); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); print('migration ok')"
 ```
 
 Expected: `migration ok`
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add migrations/versions/0003_repository_sync_runs.py
@@ -165,6 +176,8 @@ git commit -m "feat(db): add repository_sync_runs migration (0003)"
 **Files:**
 - Create: `lore/infrastructure/db/models/repository_sync_run.py`
 - Modify: `tests/integration/conftest.py`
+
+> **Note on `lore/infrastructure/db/models/__init__.py`:** This file is currently empty. The test conftest imports ORM modules directly (e.g., `from lore.infrastructure.db.models import chunk`). No changes to `__init__.py` are needed — adding the module to the conftest import is sufficient for `Base.metadata.create_all` to register the table.
 
 - [ ] **Step 1: Write `RepositorySyncRunORM`**
 
@@ -408,7 +421,10 @@ class RepositorySyncRunRepository(BaseRepository[RepositorySyncRunORM]):
         result = await self.session.execute(
             select(RepositorySyncRunORM)
             .where(RepositorySyncRunORM.repository_id == repository_id)
-            .order_by(RepositorySyncRunORM.created_at.desc())
+            .order_by(
+                RepositorySyncRunORM.created_at.desc(),
+                RepositorySyncRunORM.id.desc(),  # tiebreak for identical timestamps
+            )
             .limit(limit)
         )
         return [_orm_to_schema(orm) for orm in result.scalars().all()]
@@ -620,6 +636,9 @@ class RepositorySyncService:
                 run_id=run.id,
                 error_message=str(exc),
             )
+            # Known limitation: the route handler commits both mark_failed and any
+            # partial ingestion flushes in one transaction. This is acceptable for
+            # PR #3; a future PR may isolate sync_run persistence in its own transaction.
             raise
 ```
 
@@ -660,7 +679,9 @@ git commit -m "feat(sync): add RepositorySyncService — provider-agnostic sync 
 **Files:**
 - Create: `tests/integration/connectors/test_sync_api.py`
 
-Tests are designed to run sequentially in file order. They share the session-scoped DB (state accumulates via committed route handler transactions). Provider ID `"fake-sync"` avoids collision with existing `"fake"` provider tests in `test_import_api.py`.
+**Design principle: each test is independent.** Each test generates a unique `owner_suffix` (8-char UUID slice) so it works with its own `external_repository` and `external_object` rows. Tests do not share state or rely on execution order. Provider ID `"fake-sync"` avoids collision with `"fake"` used in `test_import_api.py`.
+
+The `_FakeSyncConnector` uses `owner_suffix` to generate stable-per-test identifiers (`external_id`, `external_url`, `logical_path`) so repeat syncs within the same test hit the same `Document` and `ExternalObject` rows — critical for idempotency tests C and D.
 
 - [ ] **Step 1: Write the full test file**
 
@@ -668,7 +689,8 @@ Tests are designed to run sequentially in file order. They share the session-sco
 # tests/integration/connectors/test_sync_api.py
 """POST /api/v1/repositories/{id}/sync and GET /sync-runs — integration tests.
 
-Tests run in file order and share accumulated DB state (session-scoped fixtures).
+Each test is independent: uses a unique owner_suffix (uuid4 slice) to avoid
+shared state between tests. No reliance on execution order.
 Provider id "fake-sync" is distinct from "fake" used in test_import_api.py.
 """
 
@@ -705,26 +727,54 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.integration
 
 PROVIDER_ID = "fake-sync"
-REPO_URL = "https://example.com/sync-test-org/sync-test-repo"
-_EXTERNAL_ID = "sync-test-org/sync-test-repo:file:README.md"
-_EXTERNAL_URL = "https://example.com/sync-test-org/sync-test-repo/blob/abc/README.md"
 
 
 class _FakeSyncConnector(BaseConnector):
     """Fake connector for sync tests.
 
-    provider, external_id, external_url, logical_path are stable across runs
-    so that repeat syncs test the same Document/ExternalObject.
-    Only content and content_hash change to test version creation.
+    owner_suffix makes provider/external_id/external_url unique per test.
+    Within a single test, these identifiers stay stable across sync calls —
+    only content and content_hash change — so repeat syncs hit the same
+    Document and ExternalObject rows (required for idempotency tests C/D).
     """
 
     def __init__(
         self,
+        owner_suffix: str = "default",
         content: str = "# Hello",
         raise_on_sync: Exception | None = None,
     ) -> None:
+        self._suffix = owner_suffix
         self._content = content
         self._raise_on_sync = raise_on_sync
+
+    # ── derived identifiers ───────────────────────────────────────────────────
+
+    @property
+    def _owner(self) -> str:
+        return f"sync-org-{self._suffix}"
+
+    @property
+    def _repo(self) -> str:
+        return f"sync-repo-{self._suffix}"
+
+    @property
+    def _full_name(self) -> str:
+        return f"{self._owner}/{self._repo}"
+
+    @property
+    def _external_id(self) -> str:
+        return f"{self._full_name}:file:README.md"
+
+    @property
+    def _external_url(self) -> str:
+        return f"https://example.com/{self._full_name}/blob/abc/README.md"
+
+    @property
+    def _html_url(self) -> str:
+        return f"https://example.com/{self._full_name}"
+
+    # ── BaseConnector interface ───────────────────────────────────────────────
 
     @property
     def manifest(self) -> ConnectorManifest:
@@ -750,11 +800,11 @@ class _FakeSyncConnector(BaseConnector):
     async def inspect_resource(self, resource_uri: str) -> ExternalContainerDraft:
         return ExternalContainerDraft(
             provider=PROVIDER_ID,
-            owner="sync-test-org",
-            name="sync-test-repo",
-            full_name="sync-test-org/sync-test-repo",
+            owner=self._owner,
+            name=self._repo,
+            full_name=self._full_name,
             default_branch="main",
-            html_url=REPO_URL,
+            html_url=self._html_url,
             visibility="public",
             metadata={},
         )
@@ -763,13 +813,13 @@ class _FakeSyncConnector(BaseConnector):
         if self._raise_on_sync is not None:
             raise self._raise_on_sync
 
-        payload = {"path": "README.md", "owner": "sync-test-org", "repo": "sync-test-repo"}
+        payload = {"path": "README.md", "owner": self._owner, "repo": self._repo}
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         raw = RawExternalObject(
             provider=PROVIDER_ID,
             object_type="github.file",
-            external_id=_EXTERNAL_ID,
-            external_url=_EXTERNAL_URL,
+            external_id=self._external_id,
+            external_url=self._external_url,
             connection_id=request.connection_id,
             repository_id=request.repository_id,
             raw_payload=payload,
@@ -781,8 +831,8 @@ class _FakeSyncConnector(BaseConnector):
             metadata={
                 "commit_sha": "abc123",
                 "path": "README.md",
-                "owner": "sync-test-org",
-                "repo": "sync-test-repo",
+                "owner": self._owner,
+                "repo": self._repo,
                 "branch": "main",
             },
         )
@@ -792,18 +842,23 @@ class _FakeSyncConnector(BaseConnector):
         return GitHubNormalizer().normalize(raw)
 
 
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+
 async def _import_repo(
     app: FastAPI,
     client: AsyncClient,
+    owner_suffix: str,
     content: str = "# Hello",
 ) -> UUID:
-    """Import (or idempotently re-fetch) the sync test repository. Returns repository_id."""
+    """Import a fresh repository with the given suffix. Returns repository_id."""
+    connector = _FakeSyncConnector(owner_suffix=owner_suffix, content=content)
     registry = ConnectorRegistry()
-    registry.register(_FakeSyncConnector(content=content))
+    registry.register(connector)
     app.state.connector_registry = registry
     resp = await client.post(
         "/api/v1/repositories/import",
-        json={"url": REPO_URL, "connector_id": PROVIDER_ID},
+        json={"url": connector._html_url, "connector_id": PROVIDER_ID},
     )
     assert resp.status_code == 200, resp.text
     return UUID(resp.json()["repository_id"])
@@ -813,15 +868,21 @@ async def _sync(
     app: FastAPI,
     client: AsyncClient,
     repo_id: UUID,
+    owner_suffix: str,
     content: str = "# Hello",
     failing: bool = False,
 ) -> tuple[int, dict]:
     """POST /sync for repo_id. Returns (status_code, body)."""
     registry = ConnectorRegistry()
     if failing:
-        registry.register(_FakeSyncConnector(raise_on_sync=RuntimeError("connector boom")))
+        registry.register(
+            _FakeSyncConnector(
+                owner_suffix=owner_suffix,
+                raise_on_sync=RuntimeError("connector boom"),
+            )
+        )
     else:
-        registry.register(_FakeSyncConnector(content=content))
+        registry.register(_FakeSyncConnector(owner_suffix=owner_suffix, content=content))
     app.state.connector_registry = registry
     resp = await client.post(f"/api/v1/repositories/{repo_id}/sync")
     try:
@@ -839,8 +900,9 @@ async def test_a_sync_endpoint_returns_200(
     app_client_with_db: AsyncClient,
 ) -> None:
     """Sync an existing imported repo → 200, sync_run created, status=succeeded."""
-    repo_id = await _import_repo(app_with_db, app_client_with_db)
-    status, body = await _sync(app_with_db, app_client_with_db, repo_id)
+    suffix = str(uuid4())[:8]
+    repo_id = await _import_repo(app_with_db, app_client_with_db, owner_suffix=suffix)
+    status, body = await _sync(app_with_db, app_client_with_db, repo_id, owner_suffix=suffix)
 
     assert status == 200
     assert body["status"] == "succeeded"
@@ -867,26 +929,31 @@ async def test_b_sync_does_not_create_duplicate_repository(
     from lore.infrastructure.db.models.external_repository import ExternalRepositoryORM
     from sqlalchemy import func
 
+    suffix = str(uuid4())[:8]
+
+    # Import repo FIRST, then count — this is the baseline (import creates 1 row)
+    repo_id = await _import_repo(app_with_db, app_client_with_db, owner_suffix=suffix)
+
     count_before = (
         await db_session.execute(
             select(func.count()).select_from(ExternalRepositoryORM).where(
-                ExternalRepositoryORM.provider == PROVIDER_ID
+                ExternalRepositoryORM.id == repo_id
             )
         )
     ).scalar_one()
+    assert count_before == 1  # sanity check
 
-    repo_id = await _import_repo(app_with_db, app_client_with_db)
-    await _sync(app_with_db, app_client_with_db, repo_id)
+    await _sync(app_with_db, app_client_with_db, repo_id, owner_suffix=suffix)
 
     count_after = (
         await db_session.execute(
             select(func.count()).select_from(ExternalRepositoryORM).where(
-                ExternalRepositoryORM.provider == PROVIDER_ID
+                ExternalRepositoryORM.id == repo_id
             )
         )
     ).scalar_one()
 
-    assert count_after == count_before
+    assert count_after == count_before  # sync must not add a row
 
 
 # ── C ─────────────────────────────────────────────────────────────────────────
@@ -897,19 +964,23 @@ async def test_c_repeat_sync_same_content_no_new_versions(
     app_client_with_db: AsyncClient,
 ) -> None:
     """Re-syncing with identical content must not create a new document version."""
-    repo_id = await _import_repo(app_with_db, app_client_with_db, content="# Version One")
-
-    # first sync with "# Version One"
-    status1, body1 = await _sync(
-        app_with_db, app_client_with_db, repo_id, content="# Version One"
+    suffix = str(uuid4())[:8]
+    content = "# Version One"
+    repo_id = await _import_repo(
+        app_with_db, app_client_with_db, owner_suffix=suffix, content=content
     )
-    assert status1 == 200
 
-    # second sync with same content
-    status2, body2 = await _sync(
-        app_with_db, app_client_with_db, repo_id, content="# Version One"
+    # first sync — same content as import → no new version
+    _, body1 = await _sync(
+        app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, content=content
     )
-    assert status2 == 200
+    assert body1["versions_created"] == 0
+    assert body1["versions_skipped"] >= 1
+
+    # second sync — still same content → still no new version
+    _, body2 = await _sync(
+        app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, content=content
+    )
     assert body2["versions_created"] == 0
     assert body2["versions_skipped"] >= 1
 
@@ -922,16 +993,21 @@ async def test_d_sync_changed_content_creates_new_version(
     app_client_with_db: AsyncClient,
 ) -> None:
     """Syncing with changed content must create exactly one new document version."""
-    repo_id = await _import_repo(app_with_db, app_client_with_db, content="# Version One")
+    suffix = str(uuid4())[:8]
+    content_a = "# Version One"
+    content_b = "# Version Two — changed"
 
-    # sync with "# Version One" — idempotent (version already from test_c or import)
-    await _sync(app_with_db, app_client_with_db, repo_id, content="# Version One")
-
-    # sync with changed content
-    status, body = await _sync(
-        app_with_db, app_client_with_db, repo_id, content="# Version Two — changed"
+    repo_id = await _import_repo(
+        app_with_db, app_client_with_db, owner_suffix=suffix, content=content_a
     )
-    assert status == 200
+
+    # sync with same content — idempotent (version from import already exists)
+    await _sync(app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, content=content_a)
+
+    # sync with changed content → new version
+    _, body = await _sync(
+        app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, content=content_b
+    )
     assert body["versions_created"] == 1
 
 
@@ -943,23 +1019,24 @@ async def test_e_failed_sync_marks_run_as_failed(
     app_client_with_db: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """Connector failure → API returns 500, sync_run persisted as failed with error_message."""
-    repo_id = await _import_repo(app_with_db, app_client_with_db)
+    """Connector failure → API returns 500, sync_run committed as failed with error_message."""
+    suffix = str(uuid4())[:8]
+    repo_id = await _import_repo(app_with_db, app_client_with_db, owner_suffix=suffix)
 
-    status, _ = await _sync(app_with_db, app_client_with_db, repo_id, failing=True)
+    status, _ = await _sync(
+        app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, failing=True
+    )
     assert status == 500
 
-    # Verify the sync_run was persisted as failed
+    # route handler committed mark_failed before raising 500 — verify via DB
     result = await db_session.execute(
         select(RepositorySyncRunORM)
         .where(RepositorySyncRunORM.repository_id == repo_id)
         .where(RepositorySyncRunORM.status == "failed")
-        .order_by(RepositorySyncRunORM.created_at.desc())
         .limit(1)
     )
     run = result.scalar_one_or_none()
-    assert run is not None, "No failed sync_run found in DB"
-    assert run.status == "failed"
+    assert run is not None, "Expected a failed sync_run in DB after 500 response"
     assert run.error_message is not None
     assert "connector boom" in run.error_message
 
@@ -972,14 +1049,21 @@ async def test_f_list_sync_runs_newest_first(
     app_client_with_db: AsyncClient,
 ) -> None:
     """GET /sync-runs returns runs newest first, with all required fields."""
-    repo_id = await _import_repo(app_with_db, app_client_with_db)
+    suffix = str(uuid4())[:8]
+    repo_id = await _import_repo(app_with_db, app_client_with_db, owner_suffix=suffix)
 
-    # ensure at least 2 sync runs for this repo
-    await _sync(app_with_db, app_client_with_db, repo_id, content="# Run F1")
-    await _sync(app_with_db, app_client_with_db, repo_id, content="# Run F2 — changed")
+    # create 2 syncs with different content so we get 2 distinct runs
+    _, body1 = await _sync(
+        app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, content="# Run F1"
+    )
+    _, body2 = await _sync(
+        app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, content="# Run F2 — changed"
+    )
+    sync_run_id1 = body1["sync_run_id"]
+    sync_run_id2 = body2["sync_run_id"]
 
     registry = ConnectorRegistry()
-    registry.register(_FakeSyncConnector())
+    registry.register(_FakeSyncConnector(owner_suffix=suffix))
     app_with_db.state.connector_registry = registry
 
     resp = await app_client_with_db.get(f"/api/v1/repositories/{repo_id}/sync-runs")
@@ -987,25 +1071,19 @@ async def test_f_list_sync_runs_newest_first(
     runs = resp.json()
     assert len(runs) >= 2
 
-    # newest first — started_at or created_at descending
-    created_ats = [r["started_at"] for r in runs if r.get("started_at")]
-    assert created_ats == sorted(created_ats, reverse=True)
+    # newest first: body2's run must appear before body1's run
+    run_ids = [r["id"] for r in runs]
+    assert run_ids.index(sync_run_id2) < run_ids.index(sync_run_id1)
 
-    # required fields
+    # required fields present in every item
     first = runs[0]
-    assert "id" in first
-    assert "repository_id" in first
-    assert "trigger" in first
-    assert "mode" in first
-    assert "status" in first
-    assert "started_at" in first
-    assert "finished_at" in first
-    assert "raw_objects_processed" in first
-    assert "documents_created" in first
-    assert "versions_created" in first
-    assert "versions_skipped" in first
-    assert "warnings_count" in first
-    assert "error_message" in first
+    for field in (
+        "id", "repository_id", "trigger", "mode", "status",
+        "started_at", "finished_at", "raw_objects_processed",
+        "documents_created", "versions_created", "versions_skipped",
+        "warnings_count", "error_message",
+    ):
+        assert field in first, f"Missing field in sync-run list item: {field}"
 
 
 # ── G ─────────────────────────────────────────────────────────────────────────
@@ -1020,19 +1098,17 @@ async def test_g_sync_nonexistent_repository_returns_404(
     registry.register(_FakeSyncConnector())
     app_with_db.state.connector_registry = registry
 
-    missing_id = uuid4()
-    resp = await app_client_with_db.post(f"/api/v1/repositories/{missing_id}/sync")
+    resp = await app_client_with_db.post(f"/api/v1/repositories/{uuid4()}/sync")
     assert resp.status_code == 404
 ```
 
-- [ ] **Step 2: Run tests — expect them to fail with 404 (endpoints don't exist yet)**
+- [ ] **Step 2: Run tests — expect them to fail (endpoints don't exist yet)**
 
 ```bash
-cd /Users/alexandermelnik/lore/lore/.claude/worktrees/feat+v0.2-github-connector-foundation
 python -m pytest tests/integration/connectors/test_sync_api.py -v --no-header -x 2>&1 | head -40
 ```
 
-Expected: Tests fail with errors like `404` or import errors. This is expected — endpoints don't exist yet.
+Expected: Tests fail — either import errors or `404 Not Found` on the sync endpoint. This is expected.
 
 - [ ] **Step 3: Commit test file**
 
