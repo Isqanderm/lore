@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Annotated
 from uuid import UUID  # noqa: TCH003
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from lore.connector_sdk.errors import ConnectorNotFoundError, ExternalResourceNotFoundError
 from lore.infrastructure.db.repositories.document import (
@@ -41,7 +41,7 @@ class ImportResponse(BaseModel):
     raw_objects_processed: int
     documents_created: int
     versions_created: int
-    warnings: list[str] = []
+    warnings: list[str] = Field(default_factory=list)
 
 
 def _build_import_service(
