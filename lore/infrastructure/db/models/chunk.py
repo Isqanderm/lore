@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
-from uuid import UUID, uuid4
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
+
+if TYPE_CHECKING:
+    from datetime import datetime
+    from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Computed, ForeignKey, Index, func

@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 
-class SourceType(str, Enum):
+class SourceType(StrEnum):
     GIT_REPO = "git_repo"
     MARKDOWN = "markdown"
     ADR = "adr"
