@@ -84,7 +84,9 @@ POST /repositories/{id}/sync
 
 ## 4. New files
 
-### `migrations/versions/0003_repository_sync_runs.py`
+### Migration: `repository_sync_runs`
+
+Create a new Alembic revision for `repository_sync_runs` following the **existing migration naming and revision style** (see `0001_initial_schema.py`, `0002_integration_layer.py`). Suggested descriptive name: `repository_sync_runs`. Do not hardcode the revision id; let Alembic generate it or use the sequential style already in the project. Ensure `down_revision` points to the previous migration.
 
 Creates `repository_sync_runs` table:
 
@@ -109,13 +111,15 @@ Creates `repository_sync_runs` table:
 | `updated_at` | TIMESTAMPTZ NOT NULL DEFAULT now() | |
 
 Indexes:
-- `ix_repository_sync_runs_repository_id_created_at` on `(repository_id, created_at)`
+- `ix_repository_sync_runs_repository_id_created_at` on `(repository_id, created_at)` — supports newest-first listing; descending index is optional, use existing project style
 - `ix_repository_sync_runs_repository_id_status` on `(repository_id, status)`
 - `ix_repository_sync_runs_connector_id` on `(connector_id)`
 
 ### `lore/infrastructure/db/models/repository_sync_run.py`
 
 `RepositorySyncRunORM(Base)` — follows `ExternalRepositoryORM` style (Mapped columns, JSONB, DateTime(timezone=True), func.now()). `updated_at` must use `onupdate=func.now()` so SQLAlchemy auto-updates it on mark_finished / mark_failed.
+
+**Column naming:** DB column `metadata` must be mapped to ORM attribute `metadata_` (use `mapped_column("metadata", ...)`) to avoid conflicts with SQLAlchemy's declarative base internals — exactly as `ExternalRepositoryORM` does with `metadata_`.
 
 ### `lore/infrastructure/db/repositories/repository_sync_run.py`
 
@@ -128,6 +132,7 @@ Four methods:
    - Sets `finished_at=now()`, updates counters
 3. `mark_failed(run_id, error_message)`
    - Sets `status="failed"`, `finished_at=now()`, `error_message`
+   - Counters (`raw_objects_processed`, etc.) remain at 0 — do not attempt partial counter recovery
 4. `list_by_repository(repository_id, limit=50) → list[RepositorySyncRun]`
    - ORDER BY `created_at DESC`
 
@@ -192,9 +197,10 @@ Add to existing router:
 - `422` on `UnsupportedSyncModeError`
 - `200` with `RepositorySyncResponse`
 
-**`GET /{repository_id}/sync-runs`**
+**`GET /{repository_id}/sync-runs?limit=50`**
 - First checks `ExternalRepositoryRepository.get_by_id()` → `404` if None
-- Then calls `RepositorySyncRunRepository.list_by_repository()`
+- Then calls `RepositorySyncRunRepository.list_by_repository(repository_id, limit=limit)`
+- `limit` query param: default 50, max 100
 - Returns `list[RepositorySyncRunListItem]` (no pagination wrapper — consistent with existing routes)
 
 **New Pydantic schemas:**
@@ -224,7 +230,7 @@ class RepositorySyncRunListItem(BaseModel):
     documents_created: int
     versions_created: int
     versions_skipped: int
-    warnings_count: int
+    warnings_count: int  # = len(run.warnings); full warnings list not exposed in list endpoint
     error_message: str | None
 ```
 
@@ -264,7 +270,7 @@ All tests: `@pytest.mark.integration`, fake connector, no real GitHub token.
 | B | `test_sync_does_not_create_duplicate_repository` | Count repos before/after sync — unchanged |
 | C | `test_repeat_sync_same_content_no_new_versions` | Run twice same content → second run versions_created=0 |
 | D | `test_sync_changed_content_creates_new_version` | Run with content A, then content B → second run versions_created=1 |
-| E | `test_failed_sync_marks_run_as_failed` | Fake connector raises → sync_run.status=failed, error_message set |
+| E | `test_failed_sync_marks_run_as_failed` | Fake connector raises → API returns 500; after failure, query repository_sync_runs and verify status=failed, error_message set |
 | F | `test_list_sync_runs_newest_first` | Create multiple runs → GET returns newest first, fields present |
 | G | `test_sync_nonexistent_repository_returns_404` | POST sync for unknown UUID → 404 |
 
@@ -279,7 +285,7 @@ class _FakeSyncConnector(BaseConnector):
         # return single RawExternalObject with self._content
 ```
 
-Content-based idempotency test (C/D): instantiate connector with different `content` values.
+**Idempotency requirement for tests C/D:** The fake connector must keep `provider`, `external_id`, `external_url`, and `logical_path`/`path` **stable** across runs. Only `content` and `content_hash` should change. This ensures test D creates a new `DocumentVersion` for the same `Document`, not a new `Document`.
 
 ---
 
@@ -317,7 +323,25 @@ Expected behavior:
 
 ---
 
-## 10. Definition of done
+## 10. Implementation notes / sharp edges
+
+1. **Alembic revision naming:** Follow existing project style (`0001_`, `0002_`). Do not hardcode a revision id beyond the sequential pattern; verify `down_revision` points to the last migration.
+
+2. **ORM `metadata_` attribute:** DB column is named `metadata`, but the ORM attribute must be named `metadata_` (use `mapped_column("metadata", JSONB, ...)`). This avoids conflicts with SQLAlchemy's declarative base internals. Follow `ExternalRepositoryORM` exactly.
+
+3. **`GET /sync-runs` limit param:** Accept `limit: int = Query(default=50, le=100)` as a query parameter. Pass it through to `list_by_repository()`.
+
+4. **`mark_failed()` counters:** For failed runs, counters remain at 0. Do not attempt partial counter recovery from exceptions. The invariant is simple: `create_running` before try, `mark_failed` in except.
+
+5. **Test E (connector raises):** The API will return 500. Test should call the endpoint, assert HTTP 500, then query `repository_sync_runs` directly via the DB session to verify `status="failed"` and `error_message` is set. Do not convert connector failures into a 200 "failed" response.
+
+6. **Fake connector for idempotency (tests C/D):** `provider`, `external_id`, `external_url`, `logical_path` must stay **identical** across both sync calls. Only `content` and `content_hash` change. Without this, test D will create a new `Document` rather than a new `DocumentVersion`.
+
+7. **`warnings_count` in list items:** Compute as `len(run.warnings)` at serialization time. The full `warnings` list is stored in the DB but not returned by the list endpoint to avoid large payloads.
+
+---
+
+## 11. Definition of done
 
 - [ ] `repository_sync_runs` table exists in migration
 - [ ] `RepositorySyncService` is provider-agnostic (no GitHub-specific code)
