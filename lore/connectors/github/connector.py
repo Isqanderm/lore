@@ -6,7 +6,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from lore.connector_sdk.base import BaseConnector
-from lore.connector_sdk.errors import ConnectorError, UnsupportedCapabilityError
+from lore.connector_sdk.errors import (
+    ConnectorAuthenticationError,
+    ConnectorError,
+    ConnectorRateLimitError,
+    UnsupportedCapabilityError,
+)
 from lore.connector_sdk.models import (
     CanonicalDocumentDraft,
     ExternalContainerDraft,
@@ -79,6 +84,8 @@ class GitHubConnector(BaseConnector):
         for entry in selected:
             try:
                 content = await self._client.get_file_content(owner, repo, entry.path, head_sha)
+            except (ConnectorAuthenticationError, ConnectorRateLimitError):
+                raise  # fatal — abort the entire sync
             except ConnectorError as exc:
                 warnings.append(f"Skipped {entry.path}: {exc}")
                 continue
