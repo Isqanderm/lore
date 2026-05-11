@@ -43,7 +43,15 @@ class GitHubClient:
         await self._client.aclose()
 
     def _raise_for_status(self, response: httpx.Response) -> None:
-        if response.status_code == 401 or response.status_code == 403:
+        if response.status_code in (403, 429):
+            remaining = response.headers.get("x-ratelimit-remaining")
+            retry_after = response.headers.get("retry-after")
+            body = response.text.lower()
+            if remaining == "0" or retry_after or "rate limit" in body:
+                raise ConnectorRateLimitError(
+                    f"GitHub API rate limit exceeded: HTTP {response.status_code}"
+                )
+        if response.status_code in (401, 403):
             raise ConnectorAuthenticationError(
                 f"GitHub authentication failed: HTTP {response.status_code}"
             )

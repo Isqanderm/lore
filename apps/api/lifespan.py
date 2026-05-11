@@ -24,12 +24,13 @@ logger = structlog.get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     registry = ConnectorRegistry()
+    github_client: GitHubClient | None = None
 
     if settings.github_token:
-        client = GitHubClient.from_settings(settings)
+        github_client = GitHubClient.from_settings(settings)
         registry.register(
             GitHubConnector(
-                client=client,
+                client=github_client,
                 file_policy=FileSelectionPolicy(),
                 normalizer=GitHubNormalizer(),
             )
@@ -41,5 +42,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.connector_registry = registry
 
     logger.info("lore.startup")
-    yield
-    logger.info("lore.shutdown")
+    try:
+        yield
+    finally:
+        if github_client is not None:
+            await github_client.close()
+        logger.info("lore.shutdown")

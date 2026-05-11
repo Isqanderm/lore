@@ -13,6 +13,14 @@ if TYPE_CHECKING:
     from lore.connector_sdk.models import CanonicalDocumentDraft, RawExternalObject, SyncResult
 
 
+def _canonical_source_type(provider: str) -> SourceType:
+    if provider in {"github", "gitlab"}:
+        return SourceType.GIT_REPO
+    if provider == "confluence":
+        return SourceType.CONFLUENCE
+    return SourceType.UNKNOWN
+
+
 class IngestionService:
     def __init__(
         self,
@@ -31,7 +39,7 @@ class IngestionService:
         sync_result: SyncResult,
         connector: BaseConnector,
     ) -> IngestionReport:
-        report = IngestionReport()
+        report = IngestionReport(warnings=list(sync_result.warnings))
         for raw in sync_result.raw_objects:
             report.raw_objects_processed += 1
             persisted = await self._upsert_raw_object(raw)
@@ -65,8 +73,8 @@ class IngestionService:
             source = await self._source_repo.create_with_external_object(
                 Source(
                     id=uuid4(),
-                    source_type_raw="github",
-                    source_type_canonical=SourceType.GIT_REPO,
+                    source_type_raw=raw.provider,
+                    source_type_canonical=_canonical_source_type(raw.provider),
                     origin=draft.provenance.external_url or draft.provenance.external_id,
                     created_at=now,
                     updated_at=now,

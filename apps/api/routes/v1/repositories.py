@@ -41,6 +41,7 @@ class ImportResponse(BaseModel):
     raw_objects_processed: int
     documents_created: int
     versions_created: int
+    warnings: list[str] = []
 
 
 def _build_import_service(
@@ -83,6 +84,7 @@ async def import_repository(
         raw_objects_processed=result.report.raw_objects_processed,
         documents_created=result.report.documents_created,
         versions_created=result.report.versions_created,
+        warnings=result.report.warnings,
     )
 
 
