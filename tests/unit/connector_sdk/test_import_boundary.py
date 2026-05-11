@@ -35,9 +35,8 @@ def test_connector_sdk_does_not_import_github() -> None:
 
     new_modules = _get_all_imported_modules("lore.connector_sdk")
     github_imports = {m for m in new_modules if "lore.connectors" in m}
-    assert (
-        not github_imports
-    ), f"lore.connector_sdk transitively imports lore.connectors: {github_imports}"
+    violation = f"lore.connector_sdk transitively imports lore.connectors: {github_imports}"
+    assert not github_imports, violation
 
 
 def test_ingestion_does_not_import_github() -> None:
@@ -47,6 +46,5 @@ def test_ingestion_does_not_import_github() -> None:
 
     new_modules = _get_all_imported_modules("lore.ingestion")
     github_imports = {m for m in new_modules if "lore.connectors" in m}
-    assert (
-        not github_imports
-    ), f"lore.ingestion transitively imports lore.connectors: {github_imports}"
+    violation = f"lore.ingestion transitively imports lore.connectors: {github_imports}"
+    assert not github_imports, violation
