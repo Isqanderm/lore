@@ -55,6 +55,7 @@ markers = [
     "unit: fast tests without DB",
     "integration: tests requiring Docker + PostgreSQL",
     "e2e: end-to-end API tests",
+    "live_github: tests requiring real GITHUB_TOKEN and LIVE_GITHUB_TEST_REPO env vars",
 ]
 
 [build-system]
