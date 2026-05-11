@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator
 
+    from fastapi import FastAPI
+
+import httpx
 import pytest
 import pytest_asyncio
 import sqlalchemy
@@ -66,3 +70,25 @@ async def db_session(db_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     async with factory() as session:
         yield session
         await session.rollback()
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def app_with_db(db_session: AsyncSession) -> AsyncGenerator[FastAPI, None]:
+    """FastAPI app with DB session injected via dependency_overrides."""
+    from apps.api.main import create_app
+    from lore.infrastructure.db.session import get_session
+
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: db_session
+    yield app
+    app.dependency_overrides.clear()
+    with contextlib.suppress(AttributeError):
+        del app.state.connector_registry
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def app_client_with_db(app_with_db: FastAPI) -> AsyncGenerator[httpx.AsyncClient, None]:
+    """AsyncClient backed by the test app."""
+    transport = httpx.ASGITransport(app=app_with_db)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client

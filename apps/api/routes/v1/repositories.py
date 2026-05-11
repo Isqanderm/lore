@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Annotated
+from uuid import UUID  # noqa: TCH003
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -19,8 +20,6 @@ from lore.ingestion.repository_import import RepositoryImportService
 from lore.ingestion.service import IngestionService
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from lore.connector_sdk.registry import ConnectorRegistry
