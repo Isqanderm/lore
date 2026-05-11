@@ -1,0 +1,38 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    env_file: .env
+    environment:
+      POSTGRES_USER: lore
+      POSTGRES_PASSWORD: lore
+      POSTGRES_DB: lore
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lore"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    # No application code connects to Redis in v0.1
+    # Included as infrastructure placeholder for future task queue / cache
+
+volumes:
+  postgres_data:
