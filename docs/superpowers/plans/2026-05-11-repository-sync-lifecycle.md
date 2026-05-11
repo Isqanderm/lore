@@ -14,7 +14,7 @@
 
 | File | Action | Responsibility |
 |---|---|---|
-| `migrations/versions/0003_repository_sync_runs.py` | Create | DDL for `repository_sync_runs` table + indexes |
+| `migrations/versions/<next>_repository_sync_runs.py` | Create | DDL for `repository_sync_runs` table + indexes |
 | `lore/infrastructure/db/models/repository_sync_run.py` | Create | `RepositorySyncRunORM` (SQLAlchemy Mapped) |
 | `lore/infrastructure/db/repositories/repository_sync_run.py` | Create | `RepositorySyncRun` dataclass + `RepositorySyncRunRepository` |
 | `lore/sync/__init__.py` | Create | Empty package marker |
@@ -165,8 +165,8 @@ Expected: `migration ok`
 - [ ] **Step 4: Commit**
 
 ```bash
-git add migrations/versions/0003_repository_sync_runs.py
-git commit -m "feat(db): add repository_sync_runs migration (0003)"
+git add migrations/versions/*_repository_sync_runs.py
+git commit -m "feat(db): add repository_sync_runs migration"
 ```
 
 ---
@@ -839,6 +839,7 @@ class _FakeSyncConnector(BaseConnector):
         return SyncResult(connector_id=PROVIDER_ID, raw_objects=[raw])
 
     def normalize(self, raw: RawExternalObject) -> list[CanonicalDocumentDraft]:
+        # Intentionally reuses GitHubNormalizer because fake-sync emits github.file-shaped objects.
         return GitHubNormalizer().normalize(raw)
 
 
@@ -971,16 +972,18 @@ async def test_c_repeat_sync_same_content_no_new_versions(
     )
 
     # first sync — same content as import → no new version
-    _, body1 = await _sync(
+    status1, body1 = await _sync(
         app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, content=content
     )
+    assert status1 == 200, body1
     assert body1["versions_created"] == 0
     assert body1["versions_skipped"] >= 1
 
     # second sync — still same content → still no new version
-    _, body2 = await _sync(
+    status2, body2 = await _sync(
         app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, content=content
     )
+    assert status2 == 200, body2
     assert body2["versions_created"] == 0
     assert body2["versions_skipped"] >= 1
 
@@ -1002,12 +1005,14 @@ async def test_d_sync_changed_content_creates_new_version(
     )
 
     # sync with same content — idempotent (version from import already exists)
-    await _sync(app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, content=content_a)
+    s0, b0 = await _sync(app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, content=content_a)
+    assert s0 == 200, b0
 
     # sync with changed content → new version
-    _, body = await _sync(
+    status, body = await _sync(
         app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, content=content_b
     )
+    assert status == 200, body
     assert body["versions_created"] == 1
 
 
@@ -1053,12 +1058,14 @@ async def test_f_list_sync_runs_newest_first(
     repo_id = await _import_repo(app_with_db, app_client_with_db, owner_suffix=suffix)
 
     # create 2 syncs with different content so we get 2 distinct runs
-    _, body1 = await _sync(
+    sf1, body1 = await _sync(
         app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, content="# Run F1"
     )
-    _, body2 = await _sync(
+    assert sf1 == 200, body1
+    sf2, body2 = await _sync(
         app_with_db, app_client_with_db, repo_id, owner_suffix=suffix, content="# Run F2 — changed"
     )
+    assert sf2 == 200, body2
     sync_run_id1 = body1["sync_run_id"]
     sync_run_id2 = body2["sync_run_id"]
 
@@ -1284,7 +1291,7 @@ async def sync_repository(
 async def list_sync_runs(
     repository_id: UUID,
     session: SessionDep,
-    limit: int = Query(default=50, le=100),
+    limit: int = Query(default=50, ge=1, le=100),
 ) -> list[RepositorySyncRunListItem]:
     ext_repo_repo = ExternalRepositoryRepository(session)
     repo = await ext_repo_repo.get_by_id(repository_id)
