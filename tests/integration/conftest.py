@@ -18,7 +18,14 @@ from sqlalchemy.ext.asyncio import (
 from testcontainers.postgres import PostgresContainer
 
 from lore.infrastructure.db.base import Base
-from lore.infrastructure.db.models import chunk, document, source  # noqa: F401
+from lore.infrastructure.db.models import (  # noqa: F401  # noqa: F401
+    chunk,
+    document,
+    external_connection,
+    external_object,
+    external_repository,
+    source,
+)
 
 
 @pytest.fixture(scope="session")
