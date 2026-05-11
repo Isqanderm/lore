@@ -1,5 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 
@@ -11,6 +12,9 @@ class Document:
     path: str
     created_at: datetime
     updated_at: datetime
+    document_kind: str | None = None
+    logical_path: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -21,3 +25,6 @@ class DocumentVersion:
     content: str
     checksum: str
     created_at: datetime
+    version_ref: str | None = None
+    source_updated_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)

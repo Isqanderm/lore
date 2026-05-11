@@ -21,3 +21,4 @@ class Source:
     origin: str
     created_at: datetime
     updated_at: datetime
+    external_object_id: UUID | None = None

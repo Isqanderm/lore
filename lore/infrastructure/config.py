@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     environment: Literal["development", "production"] = "development"
     embedding_model: str = "text-embedding-3-large"
     embedding_dimensions: int | None = None
+    github_token: SecretStr | None = None
 
 
 @lru_cache

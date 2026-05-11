@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, func
+from sqlalchemy import DateTime, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from lore.infrastructure.db.base import Base
@@ -19,4 +19,7 @@ class SourceORM(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    external_object_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("external_objects.id"), nullable=True, index=True
     )
