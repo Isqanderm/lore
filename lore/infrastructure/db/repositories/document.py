@@ -15,6 +15,9 @@ def _doc_orm_to_schema(orm: DocumentORM) -> Document:
         path=orm.path,
         created_at=orm.created_at,
         updated_at=orm.updated_at,
+        document_kind=orm.document_kind,
+        logical_path=orm.logical_path,
+        metadata=orm.metadata_,
     )
 
 
@@ -26,6 +29,9 @@ def _dv_orm_to_schema(orm: DocumentVersionORM) -> DocumentVersion:
         content=orm.content,
         checksum=orm.checksum,
         created_at=orm.created_at,
+        version_ref=orm.version_ref,
+        source_updated_at=orm.source_updated_at,
+        metadata=orm.metadata_,
     )
 
 
@@ -36,6 +42,9 @@ class DocumentRepository(BaseRepository[DocumentORM]):
             source_id=doc.source_id,
             title=doc.title,
             path=doc.path,
+            document_kind=doc.document_kind,
+            logical_path=doc.logical_path,
+            metadata_=doc.metadata,
             created_at=doc.created_at,
             updated_at=doc.updated_at,
         )
@@ -48,6 +57,31 @@ class DocumentRepository(BaseRepository[DocumentORM]):
         orm = result.scalar_one_or_none()
         return _doc_orm_to_schema(orm) if orm else None
 
+    async def get_by_source_kind_path(
+        self,
+        source_id: UUID,
+        document_kind: str,
+        logical_path: str | None,
+    ) -> Document | None:
+        if logical_path is None:
+            result = await self.session.execute(
+                select(DocumentORM).where(
+                    DocumentORM.source_id == source_id,
+                    DocumentORM.document_kind == document_kind,
+                    DocumentORM.logical_path.is_(None),
+                )
+            )
+        else:
+            result = await self.session.execute(
+                select(DocumentORM).where(
+                    DocumentORM.source_id == source_id,
+                    DocumentORM.document_kind == document_kind,
+                    DocumentORM.logical_path == logical_path,
+                )
+            )
+        orm = result.scalar_one_or_none()
+        return _doc_orm_to_schema(orm) if orm else None
+
 
 class DocumentVersionRepository(BaseRepository[DocumentVersionORM]):
     async def create(self, dv: DocumentVersion) -> DocumentVersion:
@@ -57,8 +91,33 @@ class DocumentVersionRepository(BaseRepository[DocumentVersionORM]):
             version=dv.version,
             content=dv.content,
             checksum=dv.checksum,
+            version_ref=dv.version_ref,
+            source_updated_at=dv.source_updated_at,
+            metadata_=dv.metadata,
             created_at=dv.created_at,
         )
         self.session.add(orm)
         await self.session.flush()
         return _dv_orm_to_schema(orm)
+
+    async def get_latest_version(self, document_id: UUID) -> DocumentVersion | None:
+        from sqlalchemy import desc
+
+        result = await self.session.execute(
+            select(DocumentVersionORM)
+            .where(DocumentVersionORM.document_id == document_id)
+            .order_by(desc(DocumentVersionORM.version))
+            .limit(1)
+        )
+        orm = result.scalar_one_or_none()
+        return _dv_orm_to_schema(orm) if orm else None
+
+    async def get_max_version(self, document_id: UUID) -> int:
+        from sqlalchemy import func as sqlfunc
+
+        result = await self.session.execute(
+            select(sqlfunc.max(DocumentVersionORM.version)).where(
+                DocumentVersionORM.document_id == document_id
+            )
+        )
+        return result.scalar_one_or_none() or 0
