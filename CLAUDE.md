@@ -86,6 +86,49 @@ migrations/                 Alembic — 0001_initial_schema.py done
 
 ---
 
+## Connector SDK
+
+```
+lore/connector_sdk/       Stable contract layer (SDK). Zero SQLAlchemy, zero FastAPI.
+  errors.py               ConnectorError hierarchy
+  models.py               RawExternalObject, CanonicalDocumentDraft, SyncResult, ...
+  capabilities.py         ConnectorCapabilities dataclass
+  manifest.py             ConnectorManifest dataclass
+  base.py                 BaseConnector ABC
+  registry.py             ConnectorRegistry — register/get/list/has
+
+lore/connectors/          Concrete provider integrations
+  github/                 GitHub connector (only place that imports httpx for GitHub)
+    connector.py          GitHubConnector(BaseConnector)
+    client.py             GitHubClient — async HTTP, error mapping
+    auth.py               GitHubAuth.from_settings — reads GITHUB_TOKEN
+    file_policy.py        FileSelectionPolicy — include/exclude patterns
+    normalizer.py         GitHubNormalizer — RawExternalObject → CanonicalDocumentDraft
+    manifest.py           GITHUB_MANIFEST constant
+    webhook.py            skeleton — raises UnsupportedCapabilityError
+
+lore/ingestion/
+  service.py              IngestionService — processes SyncResult into DB
+  repository_import.py    RepositoryImportService — orchestrates connector → ingestion
+  models.py               IngestionReport dataclass
+```
+
+### Connector import invariants
+
+- `lore/schema`, `lore/connector_sdk`, `lore/ingestion` must NOT import `lore.connectors`
+- Only `apps/api/lifespan.py` may import concrete connectors
+- Verified by `tests/unit/connector_sdk/test_import_boundary.py`
+
+### Adding a new connector
+
+1. Create `lore/connectors/<provider>/` following github/ structure
+2. Implement `BaseConnector` subclass with honest `ConnectorCapabilities`
+3. Register in `apps/api/lifespan.py`
+4. Add unit tests for URL parsing, file policy, normalizer, hashing
+5. Run import boundary test to verify no leakage
+
+---
+
 ## Commands
 
 ```bash
