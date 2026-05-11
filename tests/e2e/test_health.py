@@ -20,7 +20,5 @@ async def test_health_response_has_request_id_header(client: AsyncClient) -> Non
 @pytest.mark.e2e
 @pytest.mark.asyncio
 async def test_health_accepts_custom_request_id(client: AsyncClient) -> None:
-    response = await client.get(
-        "/api/v1/health", headers={"X-Request-ID": "test-id-123"}
-    )
+    response = await client.get("/api/v1/health", headers={"X-Request-ID": "test-id-123"})
     assert response.headers["x-request-id"] == "test-id-123"

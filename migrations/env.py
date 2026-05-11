@@ -8,7 +8,7 @@ from lore.infrastructure.config import get_settings
 from lore.infrastructure.db.base import Base
 
 # Import all ORM models so Alembic detects them via Base.metadata
-from lore.infrastructure.db.models import source, document, chunk  # noqa: F401
+from lore.infrastructure.db.models import chunk, document, source  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
@@ -30,7 +30,7 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: object) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)  # type: ignore[arg-type]
+    context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()
 

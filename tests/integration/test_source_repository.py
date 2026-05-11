@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -17,8 +17,8 @@ async def test_create_and_get_source(db_session: AsyncSession) -> None:
         source_type_raw="github",
         source_type_canonical=SourceType.GIT_REPO,
         origin="https://github.com/example/lore",
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
 
     created = await repo.create(source)
@@ -47,8 +47,8 @@ async def test_source_type_canonical_preserved(db_session: AsyncSession) -> None
         source_type_raw="gitlab",
         source_type_canonical=SourceType.GIT_REPO,
         origin="https://gitlab.com/example/lore",
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
     created = await repo.create(source)
     assert created.source_type_raw == "gitlab"

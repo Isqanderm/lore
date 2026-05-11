@@ -2,7 +2,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from apps.api.exception_handlers import lore_exception_handler, unhandled_exception_handler
+from apps.api.exception_handlers import lore_exception_handler
 from lore.schema.errors import LoreError, NotFoundError
 
 

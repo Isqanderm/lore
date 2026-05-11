@@ -21,23 +21,23 @@ from lore.infrastructure.db.base import Base
 from lore.infrastructure.db.models import chunk, document, source  # noqa: F401
 
 
-@pytest.fixture(scope="session")  # type: ignore[misc]
+@pytest.fixture(scope="session")
 def event_loop_policy() -> asyncio.AbstractEventLoopPolicy:
     return asyncio.DefaultEventLoopPolicy()
 
 
-@pytest.fixture(scope="session")  # type: ignore[misc]
+@pytest.fixture(scope="session")
 def postgres_container() -> PostgresContainer:
     with PostgresContainer("pgvector/pgvector:pg16", driver="asyncpg") as pg:
         yield pg
 
 
-@pytest.fixture(scope="session")  # type: ignore[misc]
+@pytest.fixture(scope="session")
 def db_url(postgres_container: PostgresContainer) -> str:
     return postgres_container.get_connection_url()  # type: ignore[no-any-return]
 
 
-@pytest_asyncio.fixture(scope="session", loop_scope="session")  # type: ignore[misc]
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def db_engine(db_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(db_url, echo=False)
 
@@ -53,7 +53,7 @@ async def db_engine(db_url: str) -> AsyncIterator[AsyncEngine]:
     await engine.dispose()
 
 
-@pytest_asyncio.fixture(loop_scope="session")  # type: ignore[misc]
+@pytest_asyncio.fixture(loop_scope="session")
 async def db_session(db_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:

@@ -1,6 +1,6 @@
-from lore.infrastructure.db.models.source import SourceORM
-from lore.infrastructure.db.models.document import DocumentORM, DocumentVersionORM
 from lore.infrastructure.db.models.chunk import ChunkORM
+from lore.infrastructure.db.models.document import DocumentORM, DocumentVersionORM
+from lore.infrastructure.db.models.source import SourceORM
 
 
 def test_source_orm_table_name() -> None:

@@ -1,6 +1,6 @@
+from lore.infrastructure.config import Settings
 from lore.infrastructure.db.base import Base
 from lore.infrastructure.db.engine import build_engine
-from lore.infrastructure.config import Settings
 
 
 def test_base_has_metadata() -> None:

@@ -1,7 +1,10 @@
 from lore.infrastructure.db.repositories.base import BaseRepository
-from lore.infrastructure.db.repositories.source import SourceRepository
-from lore.infrastructure.db.repositories.document import DocumentRepository, DocumentVersionRepository
 from lore.infrastructure.db.repositories.chunk import ChunkRepository
+from lore.infrastructure.db.repositories.document import (
+    DocumentRepository,
+    DocumentVersionRepository,
+)
+from lore.infrastructure.db.repositories.source import SourceRepository
 
 
 def test_source_repository_inherits_base() -> None:
