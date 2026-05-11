@@ -106,6 +106,9 @@ class BaseConnector(ABC):
     def connector_id(self) -> str:
         return self.manifest.connector_id
 
+    async def inspect_resource(self, resource_uri: str) -> ExternalContainerDraft:
+        raise UnsupportedCapabilityError("inspect_resource")
+
     async def full_sync(self, request: FullSyncRequest) -> SyncResult:
         raise UnsupportedCapabilityError("full_sync")
 
@@ -133,6 +136,17 @@ class FullSyncRequest:
     options: dict[str, Any] = field(default_factory=dict)
 
 @dataclass(frozen=True)
+class ExternalContainerDraft:
+    provider: str
+    owner: str
+    name: str
+    full_name: str
+    default_branch: str
+    html_url: str
+    visibility: str | None
+    metadata: dict[str, Any]
+
+@dataclass(frozen=True)
 class RawExternalObject:
     provider: str                # "github"
     object_type: str             # "github.file", "github.repository"
@@ -141,7 +155,8 @@ class RawExternalObject:
     connection_id: UUID
     repository_id: UUID | None
     raw_payload: dict[str, Any]
-    raw_payload_hash: str        # sha256(json(raw_payload)), always present
+    raw_payload_hash: str        # sha256(canonical JSON), always present
+                                 # canonical: json.dumps(payload, sort_keys=True, separators=(",",":"), default=str)
     content: str | None          # decoded text content, nullable
     content_hash: str | None     # sha256(content) if content is not None
     source_updated_at: datetime | None
@@ -303,16 +318,25 @@ Token is never logged, never stored in DB, never included in error messages or A
 ### 4.4 `client.py`
 
 ```python
+@dataclass(frozen=True)
+class GitHubRepositoryTree:
+    branch: str
+    commit_sha: str   # head commit SHA — single source of truth for provenance
+    tree_sha: str
+    entries: list[GitHubTreeEntry]
+
 class GitHubClient:
     async def get_repository(self, owner: str, repo: str) -> dict[str, Any]: ...
-    async def get_repository_tree(self, owner: str, repo: str, branch: str) -> list[GitHubTreeEntry]:
+    async def get_repository_tree(self, owner: str, repo: str, branch: str) -> GitHubRepositoryTree:
         # resolves internally: branch → commit SHA → tree SHA → recursive tree
+        # returns commit_sha to ensure commit and tree are from same point in time
         ...
-    async def get_branch_head_sha(self, owner: str, repo: str, branch: str) -> str: ...
     async def get_file_content(self, owner: str, repo: str, path: str, ref: str) -> str:
         # decodes base64, rejects binary/non-UTF-8 safely
         ...
 ```
+
+`get_repository_tree` resolves `branch → commit SHA → tree SHA` in a single logical operation and returns `commit_sha` alongside entries. The connector uses `tree.commit_sha` as the provenance anchor — no separate `get_branch_head_sha` call is needed, and no race condition between the branch pointer and file content.
 
 HTTP error mapping:
 - 401/403 → `ConnectorAuthenticationError`
@@ -351,22 +375,37 @@ class GitHubConnector(BaseConnector):
     ):
         ...
 
+    async def inspect_resource(self, resource_uri: str) -> ExternalContainerDraft:
+        owner, repo = parse_github_url(resource_uri)
+        meta = await self.client.get_repository(owner, repo)
+        return ExternalContainerDraft(
+            provider="github",
+            owner=owner,
+            name=repo,
+            full_name=meta["full_name"],
+            default_branch=meta["default_branch"],
+            html_url=meta["html_url"],
+            visibility=meta.get("visibility"),
+            metadata={},
+        )
+
     async def full_sync(self, request: FullSyncRequest) -> SyncResult:
         owner, repo = parse_github_url(request.resource_uri)
         repo_meta = await self.client.get_repository(owner, repo)
-        branch = repo_meta["default_branch"]
-        head_sha = await self.client.get_branch_head_sha(owner, repo, branch)
+
+        # Single tree call resolves branch → commit SHA → entries atomically
+        tree = await self.client.get_repository_tree(owner, repo, repo_meta["default_branch"])
+        head_sha = tree.commit_sha  # provenance anchor for all objects in this sync
 
         # 1. github.repository raw object
         repo_raw = self._build_repo_raw_object(repo_meta, request, head_sha)
 
         # 2. github.file raw objects
-        tree = await self.client.get_repository_tree(owner, repo, branch)
-        selected = self.file_policy.filter(tree)
+        selected = self.file_policy.filter(tree.entries)
         file_raws = []
         for entry in selected:
             content = await self.client.get_file_content(owner, repo, entry.path, head_sha)
-            file_raws.append(self._build_file_raw_object(entry, content, request, owner, repo, branch, head_sha))
+            file_raws.append(self._build_file_raw_object(entry, content, request, owner, repo, tree.branch, head_sha))
 
         return SyncResult(connector_id="github", raw_objects=[repo_raw, *file_raws])
 
@@ -407,7 +446,9 @@ Document kind mapping for `github.file`:
 | `.github/workflows/**/*.yml` | `config.ci` |
 | other | `code.file` |
 
-`version_ref` for files: `metadata["commit_sha"]`
+`version_ref` for files: `metadata["commit_sha"]` — authoritative, always present.
+
+`source_updated_at` for files: may be `None`. GitHub tree API does not provide per-file commit timestamps at tree-fetch time. Do **not** make per-file commit-history API calls to populate this field — it is expensive and not required for MVP. The commit SHA in `version_ref` is the definitive provenance marker.
 
 ### 4.8 `webhook.py` (skeleton)
 
@@ -548,20 +589,25 @@ async def lifespan(app: FastAPI):
 
 ### 6.3 RepositoryImportService
 
+`RepositoryImportService` depends **only on `BaseConnector`** via `ConnectorRegistry`. It must **never import `GitHubClient` directly** — that would break the provider-agnostic boundary.
+
 ```
 POST /api/v1/repositories/import
-  1. parse resource_uri → validate GitHub URL
-  2. get_or_create external_connection (provider=github, auth_mode=env_pat)
-  3. fetch repo metadata via GitHubClient
-  4. get_or_create external_repository (connection_id, full_name, ...)
-  5. build FullSyncRequest(connection_id, repository_id, resource_uri)
-  6. connector.full_sync(request) → SyncResult
-  7. ingestion.ingest_sync_result(sync_result, connector) → IngestionReport
-  8. update external_repository.last_synced_at
-  9. return {repository_id, status: "synced", connector: "github"}
+  1. registry.get(connector_id) → connector: BaseConnector
+  2. validate resource_uri (connector-agnostic URL check)
+  3. get_or_create external_connection (provider, auth_mode=env_pat)
+  4. connector.inspect_resource(resource_uri) → ExternalContainerDraft
+  5. get_or_create external_repository from draft (connection_id, full_name, ...)
+  6. build FullSyncRequest(connection_id, repository_id, resource_uri)
+  7. connector.full_sync(request) → SyncResult
+  8. ingestion.ingest_sync_result(sync_result, connector) → IngestionReport
+  9. update external_repository.last_synced_at
+ 10. return {repository_id, status: "synced", connector: connector_id}
 ```
 
 `GitHubConnector` does **not** create DB records. All persistence is in `RepositoryImportService` and `IngestionService`.
+
+MVP assumes **no concurrent sync** for the same repository. Sync-level locking is out of scope.
 
 ### 6.4 IngestionService
 
@@ -595,8 +641,20 @@ class IngestionService:
         # 5. if different (or no version yet) → create new DocumentVersion
         #    version = max(existing) + 1
         #    checksum = draft.content_hash
-        #    version_ref = draft.version_ref
-        #    source_updated_at = draft.source_updated_at
+        #    version_ref = draft.version_ref  (commit_sha for files)
+        #    source_updated_at = draft.source_updated_at  (may be None for files)
+        #    metadata = provenance snapshot (see below)
+
+# DocumentVersion.metadata must preserve a provenance snapshot at creation time,
+# because external_objects stores only the LATEST raw state (upsert overwrites on re-sync).
+# Without this snapshot, old document_versions lose their exact raw provenance.
+#
+# Required snapshot fields in DocumentVersion.metadata:
+#   external_id        stable external object identifier
+#   external_url       human URL to the content at this version
+#   raw_payload_hash   hash of the raw provider payload at time of ingestion
+#   commit_sha         git commit SHA (for file objects)
+#   path               file path (for file objects)
 ```
 
 ### 6.5 API Endpoints
@@ -680,3 +738,8 @@ tests/smoke/test_github_live_import.py
 8. `commit_sha` is mandatory in `RawExternalObject.metadata` for file objects. It is provenance core.
 9. All tests are hermetic by default. No real GitHub calls except `@pytest.mark.live_github`.
 10. Connector capabilities must only advertise implemented features.
+11. `RepositoryImportService` must not import or reference `GitHubClient` or any concrete connector type. It depends only on `BaseConnector` via `ConnectorRegistry`.
+12. `get_repository_tree` returns `commit_sha` alongside entries — single atomic operation; no separate `get_branch_head_sha` call.
+13. `raw_payload_hash` uses canonical JSON: `json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)`.
+14. `DocumentVersion.metadata` must preserve a provenance snapshot at creation time (external_id, external_url, raw_payload_hash, commit_sha, path).
+15. MVP assumes one active sync per repository at a time. No concurrent sync locking needed yet.
