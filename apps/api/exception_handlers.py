@@ -2,7 +2,9 @@ import structlog
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from lore.artifacts.errors import RepositoryNotSyncedError
 from lore.schema.errors import LoreError, NotFoundError, ValidationError
+from lore.sync.errors import RepositoryNotFoundError
 
 logger = structlog.get_logger(__name__)
 
@@ -25,6 +27,26 @@ async def lore_exception_handler(request: Request, exc: Exception) -> JSONRespon
     return JSONResponse(
         status_code=status_code,
         content={"error": {"code": code, "message": str(exc)}},
+    )
+
+
+async def domain_error_handler(
+    request: Request,
+    exc: Exception,
+) -> JSONResponse:
+    if isinstance(exc, RepositoryNotFoundError):
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"code": "repository_not_found", "message": str(exc)}},
+        )
+    elif isinstance(exc, RepositoryNotSyncedError):
+        return JSONResponse(
+            status_code=409,
+            content={"error": {"code": "repository_not_synced", "message": str(exc)}},
+        )
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"code": "internal_error", "message": "Unexpected server error"}},
     )
 
 

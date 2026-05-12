@@ -28,6 +28,7 @@ from lore.infrastructure.db.models import (  # noqa: F401  # noqa: F401
     external_connection,
     external_object,
     external_repository,
+    repository_artifact,
     repository_sync_run,
     source,
 )

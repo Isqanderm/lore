@@ -8,7 +8,7 @@ from lore.infrastructure.config import get_settings
 from lore.infrastructure.db.base import Base
 
 # Import all ORM models so Alembic detects them via Base.metadata
-from lore.infrastructure.db.models import chunk, document, source  # noqa: F401
+from lore.infrastructure.db.models import chunk, document, repository_artifact, source  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

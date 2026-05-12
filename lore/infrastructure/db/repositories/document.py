@@ -1,10 +1,19 @@
-from uuid import UUID
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from uuid import UUID
 
 from sqlalchemy import select
 
 from lore.infrastructure.db.models.document import DocumentORM, DocumentVersionORM
+from lore.infrastructure.db.models.external_object import ExternalObjectORM
+from lore.infrastructure.db.models.source import SourceORM
 from lore.infrastructure.db.repositories.base import BaseRepository
 from lore.schema.document import Document, DocumentVersion
+
+_GITHUB_FILE_OBJECT_TYPE = "github.file"
 
 
 def _doc_orm_to_schema(orm: DocumentORM) -> Document:
@@ -56,6 +65,20 @@ class DocumentRepository(BaseRepository[DocumentORM]):
         result = await self.session.execute(select(DocumentORM).where(DocumentORM.id == id))
         orm = result.scalar_one_or_none()
         return _doc_orm_to_schema(orm) if orm else None
+
+    async def get_document_paths_by_repository_id(self, repository_id: UUID) -> list[str]:
+        result = await self.session.execute(
+            select(DocumentORM.path)
+            .distinct()
+            .join(SourceORM, DocumentORM.source_id == SourceORM.id)
+            .join(ExternalObjectORM, SourceORM.external_object_id == ExternalObjectORM.id)
+            .where(
+                ExternalObjectORM.repository_id == repository_id,
+                ExternalObjectORM.object_type == _GITHUB_FILE_OBJECT_TYPE,
+            )
+            .order_by(DocumentORM.path)
+        )
+        return list(result.scalars().all())
 
     async def get_by_source_kind_path(
         self,

@@ -127,3 +127,21 @@ class RepositorySyncRunRepository(BaseRepository[RepositorySyncRunORM]):
             .limit(limit)
         )
         return [_orm_to_schema(orm) for orm in result.scalars().all()]
+
+    async def get_latest_succeeded_by_repository(
+        self, repository_id: UUID
+    ) -> RepositorySyncRun | None:
+        result = await self.session.execute(
+            select(RepositorySyncRunORM)
+            .where(
+                RepositorySyncRunORM.repository_id == repository_id,
+                RepositorySyncRunORM.status == "succeeded",
+            )
+            .order_by(
+                RepositorySyncRunORM.finished_at.desc().nulls_last(),
+                RepositorySyncRunORM.started_at.desc(),
+            )
+            .limit(1)
+        )
+        orm = result.scalar_one_or_none()
+        return _orm_to_schema(orm) if orm else None
