@@ -1,3 +1,7 @@
+from dataclasses import FrozenInstanceError
+
+import pytest
+
 from lore.schema.repository_artifact import ARTIFACT_TYPE_REPOSITORY_BRIEF, RepositoryArtifact
 
 
@@ -20,4 +24,5 @@ def test_repository_artifact_is_frozen() -> None:
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
-    assert artifact.artifact_type == "repository_brief"
+    with pytest.raises(FrozenInstanceError):
+        artifact.artifact_type = "other"  # type: ignore[misc]
