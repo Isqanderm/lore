@@ -159,7 +159,7 @@ async def test_generate_brief_creates_brief(
     app_client_with_db: httpx.AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """POST /brief/generate on repo with a succeeded sync run returns 201 with fresh brief."""
+    """POST /brief/generate on repo with a succeeded sync run returns 200 with fresh brief."""
     repo = await _seed_repo(db_session)
     await _seed_sync_run(db_session, repo)
 
