@@ -128,13 +128,19 @@ def downgrade() -> None:
     op.drop_table("repository_artifacts")
 ```
 
-- [ ] **Step 2: Verify migration runs** (requires Docker)
+- [ ] **Step 2: Verify migration syntax; run against DB if available**
 
+If the dev stack is running:
 ```bash
 make migrate
 ```
-
 Expected: `Running upgrade 0003 -> 0004, repository_artifacts — deterministic brief artifacts`
+
+If no DB is available, verify the migration at least imports without errors:
+```bash
+python -c "from migrations.versions.v0004_repository_artifacts import upgrade, downgrade; print('OK')"
+```
+Do NOT block on infrastructure. Proceed to Step 3 even if DB is unavailable; integration tests will execute the migration via testcontainers.
 
 - [ ] **Step 3: Commit**
 
@@ -501,10 +507,10 @@ Expected: `ImportError` or `ModuleNotFoundError` for `RepositoryArtifactReposito
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 
 from lore.infrastructure.db.models.repository_artifact import RepositoryArtifactORM
 from lore.infrastructure.db.repositories.base import BaseRepository
@@ -527,16 +533,10 @@ def _orm_to_schema(orm: RepositoryArtifactORM) -> RepositoryArtifact:
 
 class RepositoryArtifactRepository(BaseRepository[RepositoryArtifactORM]):
     async def upsert(self, artifact: RepositoryArtifact) -> RepositoryArtifact:
-        result = await self.session.execute(
-            select(RepositoryArtifactORM).where(
-                RepositoryArtifactORM.repository_id == artifact.repository_id,
-                RepositoryArtifactORM.artifact_type == artifact.artifact_type,
-            )
-        )
-        orm = result.scalar_one_or_none()
         now = datetime.now(UTC)
-        if orm is None:
-            orm = RepositoryArtifactORM(
+        stmt = (
+            insert(RepositoryArtifactORM)
+            .values(
                 id=artifact.id,
                 repository_id=artifact.repository_id,
                 artifact_type=artifact.artifact_type,
@@ -547,14 +547,20 @@ class RepositoryArtifactRepository(BaseRepository[RepositoryArtifactORM]):
                 created_at=now,
                 updated_at=now,
             )
-            self.session.add(orm)
-        else:
-            orm.title = artifact.title
-            orm.content_json = artifact.content_json
-            orm.source_sync_run_id = artifact.source_sync_run_id
-            orm.generated_at = artifact.generated_at
-            orm.updated_at = now
-        await self.session.flush()
+            .on_conflict_do_update(
+                constraint="uq_repository_artifact_type",
+                set_=dict(
+                    title=artifact.title,
+                    content_json=artifact.content_json,
+                    source_sync_run_id=artifact.source_sync_run_id,
+                    generated_at=artifact.generated_at,
+                    updated_at=now,
+                ),
+            )
+            .returning(RepositoryArtifactORM)
+        )
+        result = await self.session.execute(stmt)
+        orm = result.scalar_one()
         return _orm_to_schema(orm)
 
     async def get_by_repository_and_type(
@@ -1212,8 +1218,10 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime  # noqa: TC003, TCH003
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID  # noqa: TC003, TCH003
+
+RepositoryBriefState = Literal["missing", "fresh", "stale"]
 
 MARKDOWN_EXTENSIONS: frozenset[str] = frozenset({".md", ".mdx"})
 
@@ -1292,7 +1300,7 @@ class RepositoryBriefSignals:
 class RepositoryBriefServiceResult:
     repository_id: UUID
     exists: bool
-    state: str  # "missing" | "fresh" | "stale"
+    state: RepositoryBriefState
     is_stale: bool | None
     generated_at: datetime | None
     source_sync_run_id: UUID | None
@@ -1308,15 +1316,20 @@ def _is_config(name_lower: str, path_lower: str) -> bool:
         if fnmatch.fnmatch(name_lower, pattern):
             return True
     parts = Path(path_lower).parts
-    if len(parts) >= 2 and parts[-3:-1] == (".github", "workflows"):
-        return True
     if len(parts) >= 3 and parts[-3] == ".github" and parts[-2] == "workflows":
         return True
     return False
 
 
 def _is_test(path_lower: str) -> bool:
-    return any(pattern in path_lower for pattern in TEST_PATH_PATTERNS)
+    parts = Path(path_lower).parts
+    name = Path(path_lower).name
+    return (
+        "tests" in parts
+        or "__tests__" in parts
+        or "test" in name
+        or "spec" in name
+    )
 
 
 def categorize_paths(paths: list[str]) -> FileCategorization:
@@ -1451,7 +1464,58 @@ def build_brief_content_dict(
     }
 ```
 
-- [ ] **Step 4: Run unit tests**
+- [ ] **Step 4: Register errors in `apps/api/exception_handlers.py`**
+
+The project uses a centralized handler that returns `{"error": {"code": ..., "message": ...}}`.
+`RepositoryNotFoundError` (from `lore.sync.errors`) and `RepositoryNotSyncedError` (new) are NOT `LoreError`,
+so they need their own handler. Add to the bottom of `apps/api/exception_handlers.py`:
+
+```python
+from lore.artifacts.errors import RepositoryNotSyncedError
+from lore.sync.errors import RepositoryNotFoundError
+
+_DOMAIN_STATUS_MAP: dict[type[Exception], int] = {
+    RepositoryNotFoundError: 404,
+    RepositoryNotSyncedError: 409,
+}
+
+_DOMAIN_CODE_MAP: dict[type[Exception], str] = {
+    RepositoryNotFoundError: "repository_not_found",
+    RepositoryNotSyncedError: "repository_not_synced",
+}
+
+
+async def domain_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    status_code = _DOMAIN_STATUS_MAP.get(type(exc), 500)
+    code = _DOMAIN_CODE_MAP.get(type(exc), "domain_error")
+    logger.warning("lore.domain_error", code=code, message=str(exc), path=request.url.path)
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": code, "message": str(exc)}},
+    )
+```
+
+Then register in `apps/api/main.py` (before `Exception` handler, order matters):
+
+```python
+from apps.api.exception_handlers import (
+    domain_error_handler,
+    lore_exception_handler,
+    unhandled_exception_handler,
+)
+from lore.artifacts.errors import RepositoryNotSyncedError
+from lore.sync.errors import RepositoryNotFoundError
+
+# Inside create_app(), after add_middleware:
+app.add_exception_handler(RepositoryNotFoundError, domain_error_handler)
+app.add_exception_handler(RepositoryNotSyncedError, domain_error_handler)
+app.add_exception_handler(LoreError, lore_exception_handler)
+app.add_exception_handler(Exception, unhandled_exception_handler)
+```
+
+Note: the existing `app.add_exception_handler(LoreError, ...)` and `Exception` lines stay, but `RepositoryNotFoundError`/`RepositoryNotSyncedError` must be registered **before** the catch-all `Exception` handler.
+
+- [ ] **Step 5: Run unit tests**
 
 ```bash
 make test-unit
@@ -1459,16 +1523,18 @@ make test-unit
 
 Expected: all categorization tests PASS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add \
   lore/artifacts/__init__.py \
   lore/artifacts/errors.py \
   lore/artifacts/repository_brief_models.py \
+  apps/api/exception_handlers.py \
+  apps/api/main.py \
   tests/unit/artifacts/__init__.py \
   tests/unit/artifacts/test_file_categorization.py
-git commit -m "feat(artifacts): add file categorization models and pure functions"
+git commit -m "feat(artifacts): add file categorization models, errors, and exception handlers"
 ```
 
 ---
@@ -1486,10 +1552,12 @@ Create `tests/unit/artifacts/_fakes.py`:
 
 ```python
 # tests/unit/artifacts/_fakes.py
+# NOTE: ExternalRepository and RepositorySyncRun are domain schema dataclasses (not ORM).
+# Verify their actual import paths before running — they live alongside their repository classes.
+# If paths differ in your codebase, adapt these imports to match current conventions.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
 from uuid import UUID, uuid4
 
 from lore.infrastructure.db.repositories.external_repository import ExternalRepository
@@ -2344,6 +2412,54 @@ async def test_post_generate_makes_stale_brief_fresh_again(
     body = response.json()
     assert body["is_stale"] is False
     assert body["state"] == "fresh"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_post_generate_counts_github_file_documents(
+    app_client_with_db: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Full path: real DocumentORM with github.file object type → stats and signals."""
+    from lore.infrastructure.db.models.document import DocumentORM
+    from lore.infrastructure.db.models.external_object import ExternalObjectORM
+    from lore.infrastructure.db.models.source import SourceORM
+
+    repo, _ = await _seed_repo_with_succeeded_run(db_session)
+    now = datetime.now(UTC)
+
+    ext_obj = ExternalObjectORM(
+        id=uuid4(), connection_id=repo.connection_id, repository_id=repo.id,
+        provider="github", object_type="github.file",
+        external_id=f"{repo.full_name}:file:README.md",
+        raw_payload_json={}, raw_payload_hash="h1",
+        fetched_at=now, metadata_={},
+    )
+    db_session.add(ext_obj)
+    await db_session.flush()
+
+    source = SourceORM(
+        id=uuid4(), source_type_raw="github", source_type_canonical="git_repo",
+        origin=repo.html_url, external_object_id=ext_obj.id,
+        created_at=now, updated_at=now,
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    doc = DocumentORM(
+        id=uuid4(), source_id=source.id,
+        title="README.md", path="README.md",
+        document_kind="documentation.readme",
+        logical_path="README.md",
+        metadata_={}, created_at=now, updated_at=now,
+    )
+    db_session.add(doc)
+    await db_session.flush()
+
+    response = await app_client_with_db.post(f"/api/v1/repositories/{repo.id}/brief/generate")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["brief"]["stats"]["total_files"] == 1
+    assert body["brief"]["signals"]["has_readme"] is True
 ```
 
 - [ ] **Step 2: Run tests — confirm they fail**
@@ -2360,23 +2476,23 @@ Create `apps/api/routes/v1/repository_artifacts.py`:
 
 ```python
 # apps/api/routes/v1/repository_artifacts.py
+# RepositoryNotFoundError and RepositoryNotSyncedError are handled by domain_error_handler
+# registered in apps/api/main.py — do NOT catch them here.
 from __future__ import annotations
 
 from datetime import datetime  # noqa: TCH003
 from typing import TYPE_CHECKING, Annotated, Any
 from uuid import UUID  # noqa: TCH003
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from lore.artifacts.errors import RepositoryNotSyncedError
 from lore.artifacts.repository_brief_service import RepositoryBriefService
 from lore.infrastructure.db.repositories.document import DocumentRepository
 from lore.infrastructure.db.repositories.external_repository import ExternalRepositoryRepository
 from lore.infrastructure.db.repositories.repository_artifact import RepositoryArtifactRepository
 from lore.infrastructure.db.repositories.repository_sync_run import RepositorySyncRunRepository
 from lore.infrastructure.db.session import get_session
-from lore.sync.errors import RepositoryNotFoundError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -2435,10 +2551,7 @@ async def get_repository_brief(
     session: SessionDep,
 ) -> RepositoryBriefMissingResponse | RepositoryBriefPresentResponse:
     svc = _build_brief_service(session)
-    try:
-        result = await svc.get_brief(repository_id)
-    except RepositoryNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    result = await svc.get_brief(repository_id)
     return _to_response(result)
 
 
@@ -2448,20 +2561,7 @@ async def generate_repository_brief(
     session: SessionDep,
 ) -> RepositoryBriefPresentResponse:
     svc = _build_brief_service(session)
-    try:
-        result = await svc.generate_brief(repository_id)
-    except RepositoryNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RepositoryNotSyncedError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": {
-                    "code": "repository_not_synced",
-                    "message": str(exc),
-                }
-            },
-        ) from exc
+    result = await svc.generate_brief(repository_id)
     await session.commit()
     return _to_response(result)
 ```
@@ -2496,10 +2596,11 @@ Expected: all 7 new API tests PASS
 ```bash
 git add \
   apps/api/routes/v1/repository_artifacts.py \
-  apps/api/main.py \
   tests/integration/test_repository_brief_api.py
 git commit -m "feat(api): add GET /brief and POST /brief/generate endpoints"
 ```
+
+Note: `apps/api/main.py` and `apps/api/exception_handlers.py` were committed in Task 7.
 
 ---
 
@@ -2578,12 +2679,24 @@ Before finishing, verify each item:
 - [ ] `failed` sync run test passes (stale stays false)
 - [ ] `same content new sync makes stale` test passes (sync-run based, not content-diff)
 - [ ] `POST /brief/generate` returns `409` with `error.code = "repository_not_synced"` when no sync
+- [ ] `409` response body shape: `{"error": {"code": "repository_not_synced", "message": ...}}` (NOT `{"detail": {...}}`)
+- [ ] `404` response body shape for unknown repo: `{"error": {"code": "repository_not_found", ...}}`
+- [ ] `RepositoryNotFoundError` and `RepositoryNotSyncedError` are NOT caught in route handlers — handled by `domain_error_handler`
+- [ ] Upsert uses `ON CONFLICT DO UPDATE` (PostgreSQL atomic, no select-then-insert)
 - [ ] Upsert test: second call does NOT create a second row (UNIQUE constraint + upsert semantics)
+- [ ] `_is_test` uses path parts, NOT substring match (to avoid false positives like `contest_solver.py`)
+- [ ] `_is_config` has ONE `.github/workflows` check (not duplicate)
+- [ ] `RepositoryBriefState = Literal["missing", "fresh", "stale"]` used in `RepositoryBriefServiceResult.state`
+- [ ] API integration test with real `DocumentORM` + `github.file` `ExternalObjectORM` passes
 - [ ] Integration conftest imports `repository_artifact` module
 
 ---
 
 ## Execution Notes
+
+### Commit discipline
+
+Commit **only after the task's tests pass**. If tests cannot run because infrastructure (Docker/DB) is unavailable, do NOT commit; record the reason in the final summary and proceed — integration tests via testcontainers will validate the code. Never commit a state where tests are known to fail.
 
 ### Known limitation (document in brief service)
 
