@@ -121,8 +121,8 @@ class RepositorySyncRunRepository(BaseRepository[RepositorySyncRunORM]):
             select(RepositorySyncRunORM)
             .where(RepositorySyncRunORM.repository_id == repository_id)
             .order_by(
+                RepositorySyncRunORM.started_at.desc(),
                 RepositorySyncRunORM.created_at.desc(),
-                RepositorySyncRunORM.id.desc(),  # tiebreak for identical timestamps
             )
             .limit(limit)
         )

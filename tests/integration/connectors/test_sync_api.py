@@ -238,24 +238,25 @@ async def test_b_sync_does_not_create_duplicate_repository(
     app_client_with_db: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """Sync must not create a new external_repository row."""
+    """Sync must not create a new external_repository row for the same provider+full_name."""
     from sqlalchemy import func
 
     from lore.infrastructure.db.models.external_repository import ExternalRepositoryORM
 
     suffix = str(uuid4())[:8]
+    full_name = f"sync-org-{suffix}/sync-repo-{suffix}"
 
-    # Import repo FIRST, then count — this is the baseline (import creates 1 row)
     repo_id = await _import_repo(app_with_db, app_client_with_db, owner_suffix=suffix)
 
     count_before = (
         await db_session.execute(
             select(func.count())
             .select_from(ExternalRepositoryORM)
-            .where(ExternalRepositoryORM.id == repo_id)
+            .where(ExternalRepositoryORM.provider == PROVIDER_ID)
+            .where(ExternalRepositoryORM.full_name == full_name)
         )
     ).scalar_one()
-    assert count_before == 1  # sanity check
+    assert count_before == 1  # sanity: import created exactly one row
 
     await _sync(app_with_db, app_client_with_db, repo_id, owner_suffix=suffix)
 
@@ -263,11 +264,12 @@ async def test_b_sync_does_not_create_duplicate_repository(
         await db_session.execute(
             select(func.count())
             .select_from(ExternalRepositoryORM)
-            .where(ExternalRepositoryORM.id == repo_id)
+            .where(ExternalRepositoryORM.provider == PROVIDER_ID)
+            .where(ExternalRepositoryORM.full_name == full_name)
         )
     ).scalar_one()
 
-    assert count_after == count_before  # sync must not add a row
+    assert count_after == 1  # sync must not add a duplicate row
 
 
 # ── C ─────────────────────────────────────────────────────────────────────────
