@@ -81,6 +81,16 @@ def _content_from_dict(d: dict) -> RepositoryBriefContent:  # type: ignore[type-
     )
 
 
+def _content_to_json_safe_dict(content: RepositoryBriefContent) -> dict:  # type: ignore[type-arg]
+    """Convert RepositoryBriefContent to a JSON-safe dict (datetime → ISO string)."""
+    d = dataclasses.asdict(content)
+    sync = d.get("sync", {})
+    if isinstance(sync.get("last_synced_at"), datetime):
+        sync["last_synced_at"] = sync["last_synced_at"].isoformat()
+    d["sync"] = sync
+    return d
+
+
 @dataclass(frozen=True)
 class RepositoryBriefServiceResult:
     exists: bool
@@ -146,12 +156,13 @@ class RepositoryBriefService:
         )
 
         now = datetime.now(UTC)
+        content_json = _content_to_json_safe_dict(content)
         artifact = RepositoryArtifact(
             id=uuid4(),
             repository_id=repository_id,
             artifact_type=ARTIFACT_TYPE_REPOSITORY_BRIEF,
             title=f"Repository Brief: {repo.full_name}",
-            content_json=dataclasses.asdict(content),
+            content_json=content_json,
             source_sync_run_id=latest_run.id,
             generated_at=now,
             created_at=now,

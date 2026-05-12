@@ -9,6 +9,7 @@ from apps.api.lifespan import lifespan
 from apps.api.routes.v1.connectors import router as connectors_router
 from apps.api.routes.v1.health import router as health_router
 from apps.api.routes.v1.repositories import router as repositories_router
+from apps.api.routes.v1.repository_artifacts import router as repository_artifacts_router
 from lore.artifacts.errors import RepositoryNotSyncedError
 from lore.infrastructure.config import get_settings
 from lore.infrastructure.observability.logging import configure_logging
@@ -28,6 +29,7 @@ def create_app() -> FastAPI:
     api_v1.include_router(health_router)
     api_v1.include_router(connectors_router)
     api_v1.include_router(repositories_router)
+    api_v1.include_router(repository_artifacts_router)
     app.include_router(api_v1)
 
     app.add_exception_handler(RepositoryNotFoundError, domain_error_handler)
