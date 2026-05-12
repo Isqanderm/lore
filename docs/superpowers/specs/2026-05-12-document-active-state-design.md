@@ -60,7 +60,9 @@ Follow the style of `0004_repository_artifacts.py`: use `op.add_column()` since 
 Add 4 fields using `Mapped` + `mapped_column`, consistent with existing ORM style:
 
 ```python
-is_active: Mapped[bool] = mapped_column(nullable=False, server_default="true", index=True)
+import sqlalchemy as sa
+
+is_active: Mapped[bool] = mapped_column(nullable=False, server_default=sa.text("true"), index=True)
 deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 first_seen_sync_run_id: Mapped[UUID | None] = mapped_column(
     ForeignKey("repository_sync_runs.id"), nullable=True, index=True
@@ -327,7 +329,9 @@ def _build_sync_service(session, registry) -> RepositorySyncService:
     return RepositorySyncService(registry, ingestion, ext_repo_repo, sync_run_repo, doc_repo)
 ```
 
-Check that `mark_finished` in `RepositorySyncRunRepository` already accepts `metadata`. If it does, pass `{"documents_marked_inactive": inactive_count}`. If not, do not expand the public API or response models for this PR — either add metadata support consistent with existing repository style, or skip `inactive_count` persistence.
+**Do not modify response models or route schemas for `inactive_count`.**
+If `mark_finished` already accepts a `metadata` parameter, pass `{"documents_marked_inactive": inactive_count}` there.
+If `mark_finished` does not accept `metadata`, skip `inactive_count` persistence entirely — keep it as a local variable used only in tests. Do not add a new parameter to `mark_finished` or expand any repository, service, or response model to accommodate it.
 
 ---
 
@@ -384,7 +388,7 @@ class MutableFakeConnector(BaseConnector):
 
     async def full_sync(self, request):
         return SyncResult(
-            connector_id="mutable-fake",
+            connector_id="github",  # must match provider of the seeded repository
             raw_objects=self.files,
             warnings=self.warnings,
         )
@@ -403,6 +407,8 @@ await sync_service.sync_repository(repo_id)
 
 # assert app.py is inactive
 ```
+
+**Stable identity across syncs:** For unchanged and reappeared files, `external_id`, `connection_id`, and `metadata.path` must be identical across all syncs. Only `content` and `content_hash` should change when testing new versions. If `external_id` drifts between syncs, ingestion creates a new `ExternalObject` and a new `Document` instead of updating the existing one, making state-tracking assertions invalid.
 
 ### Test scenarios
 
