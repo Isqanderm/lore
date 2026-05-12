@@ -76,6 +76,8 @@ class RepositoryImportService:
         # 6. Mark repository as synced
         await self._ext_repository_repo.mark_synced(ext_repo.id, datetime.now(UTC))
 
+        # TODO: record sync_run with trigger="import" once RepositoryImportService
+        # is refactored to delegate ingestion to RepositorySyncService.
         return ImportResult(
             repository_id=ext_repo.id,
             connector_id=connector_id,
