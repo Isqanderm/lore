@@ -41,5 +41,6 @@ def test_repository_artifact_orm_has_required_columns() -> None:
     assert "repository_id" in cols
     assert "artifact_type" in cols
     assert "content_json" in cols
+    assert "title" in cols
     assert "source_sync_run_id" in cols
     assert "generated_at" in cols
