@@ -43,8 +43,16 @@ def upgrade() -> None:
             "artifact_type IN ('repository_brief')",
             name="ck_repository_artifact_type",
         ),
-        sa.ForeignKeyConstraint(["repository_id"], ["external_repositories.id"]),
-        sa.ForeignKeyConstraint(["source_sync_run_id"], ["repository_sync_runs.id"]),
+        sa.ForeignKeyConstraint(
+            ["repository_id"],
+            ["external_repositories.id"],
+            name="fk_repository_artifacts_repository_id",
+        ),
+        sa.ForeignKeyConstraint(
+            ["source_sync_run_id"],
+            ["repository_sync_runs.id"],
+            name="fk_repository_artifacts_source_sync_run_id",
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("repository_id", "artifact_type", name="uq_repository_artifact_type"),
     )
