@@ -87,6 +87,7 @@ async def test_upsert_creates_artifact(db_session: AsyncSession) -> None:
     artifact = _make_artifact(repo.id, run.id)
     saved = await artifact_repo.upsert(artifact)
 
+    assert saved.id == artifact.id
     assert saved.repository_id == repo.id
     assert saved.artifact_type == ARTIFACT_TYPE_REPOSITORY_BRIEF
     assert saved.source_sync_run_id == run.id

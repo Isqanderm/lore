@@ -56,8 +56,8 @@ class RepositoryArtifactRepository(BaseRepository[RepositoryArtifactORM]):
             )
             .returning(RepositoryArtifactORM)
         )
+        # RETURNING populates the cursor at execute time; no explicit flush needed here
         result = await self.session.execute(stmt)
-        await self.session.flush()
         orm = result.scalars().one()
         return _orm_to_schema(orm)
 
