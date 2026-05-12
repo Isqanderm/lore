@@ -25,3 +25,21 @@ def test_chunk_has_required_columns() -> None:
     assert "embedding_ref" in cols
     assert "text_search" in cols
     assert "metadata_json" in cols
+
+
+def test_repository_artifact_orm_table_name() -> None:
+    from lore.infrastructure.db.models.repository_artifact import RepositoryArtifactORM
+
+    assert RepositoryArtifactORM.__tablename__ == "repository_artifacts"
+
+
+def test_repository_artifact_orm_has_required_columns() -> None:
+    from lore.infrastructure.db.models.repository_artifact import RepositoryArtifactORM
+
+    cols = {c.name for c in RepositoryArtifactORM.__table__.columns}
+    assert "id" in cols
+    assert "repository_id" in cols
+    assert "artifact_type" in cols
+    assert "content_json" in cols
+    assert "source_sync_run_id" in cols
+    assert "generated_at" in cols
