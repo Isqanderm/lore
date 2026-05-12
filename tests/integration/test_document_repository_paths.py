@@ -139,6 +139,8 @@ async def test_get_paths_returns_distinct_sorted_paths(
 
     await _seed_document(db_session, src, "src/z_last.py")
     await _seed_document(db_session, src, "src/a_first.py")
+    # Third document with same path as the first — exercises DISTINCT deduplication
+    await _seed_document(db_session, src, "src/z_last.py")
 
     result = await doc_repo.get_document_paths_by_repository_id(repo.id)
 
@@ -152,10 +154,17 @@ async def test_get_paths_excludes_other_object_types(
     repo = await _seed_connection_and_repo(db_session)
     doc_repo = DocumentRepository(db_session)
 
+    # Seed a github.file object — its document path MUST appear in results
+    eo_file = await _seed_external_object(db_session, repo, "github.file", "file:src/app.py")
+    src_file = await _seed_source(db_session, eo_file)
+    await _seed_document(db_session, src_file, "src/app.py")
+
+    # Seed a github.pr object — its document path must NOT appear in results
     eo_pr = await _seed_external_object(db_session, repo, "github.pr", "pr:42")
     src_pr = await _seed_source(db_session, eo_pr)
     await _seed_document(db_session, src_pr, "pulls/42.md")
 
     result = await doc_repo.get_document_paths_by_repository_id(repo.id)
 
+    assert "src/app.py" in result
     assert "pulls/42.md" not in result
