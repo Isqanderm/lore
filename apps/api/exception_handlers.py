@@ -39,10 +39,14 @@ async def domain_error_handler(
             status_code=404,
             content={"error": {"code": "repository_not_found", "message": str(exc)}},
         )
-    assert isinstance(exc, RepositoryNotSyncedError)
+    elif isinstance(exc, RepositoryNotSyncedError):
+        return JSONResponse(
+            status_code=409,
+            content={"error": {"code": "repository_not_synced", "message": str(exc)}},
+        )
     return JSONResponse(
-        status_code=409,
-        content={"error": {"code": "repository_not_synced", "message": str(exc)}},
+        status_code=500,
+        content={"error": {"code": "internal_error", "message": "Unexpected server error"}},
     )
 
 

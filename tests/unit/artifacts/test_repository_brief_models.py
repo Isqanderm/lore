@@ -153,7 +153,7 @@ def test_get_language_counts_sorted_desc() -> None:
     assert result[1].count == 1
 
 
-def test_get_language_counts_excludes_unknown_extensions() -> None:
+def test_get_language_counts_includes_all_extensions() -> None:
     result = _get_language_counts(["file.xyz"])
     # All extensions should be counted, unknown ones too
     assert len(result) == 1

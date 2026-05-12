@@ -79,14 +79,14 @@ class RepositoryBriefSignals:
 
 @dataclass(frozen=True)
 class RepositoryBriefContent:
-    schema_version: int
-    generated_by: str
     repository: RepositoryBriefRepositoryInfo
     sync: RepositoryBriefSyncInfo
     stats: RepositoryBriefStats
     languages: list[LanguageEntry]
     important_files: list[ImportantFileEntry]
     signals: RepositoryBriefSignals
+    schema_version: int = 1
+    generated_by: str = "repository_brief_service"
 
 
 def _is_config(path_str: str) -> bool:
@@ -126,9 +126,7 @@ def _is_test(path_str: str) -> bool:
         if part.lower() in test_dirs:
             return True
     stem = p.stem.lower()
-    if stem.startswith("test_") or stem.endswith("_test") or stem.endswith(".test"):
-        return True
-    return stem == "test" or stem == "spec"
+    return stem.startswith("test_") or stem.endswith("_test") or stem.endswith(".test")
 
 
 def _categorize_paths(paths: list[str]) -> RepositoryBriefStats:
