@@ -262,5 +262,5 @@ async def test_generate_brief_with_real_documents(
     data = response.json()
     assert data["state"] == "fresh"
     stats = data["brief"]["stats"]
-    assert stats["total_files"] >= 1
-    assert stats["source_files"] >= 1
+    assert stats["total_files"] == 1
+    assert stats["source_files"] == 1
