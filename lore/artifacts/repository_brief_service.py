@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
@@ -80,44 +81,18 @@ def _content_from_dict(d: dict) -> RepositoryBriefContent:  # type: ignore[type-
     )
 
 
+@dataclass(frozen=True)
 class RepositoryBriefServiceResult:
-    __slots__ = (
-        "exists",
-        "state",
-        "is_stale",
-        "repository_id",
-        "artifact_type",
-        "generated_at",
-        "source_sync_run_id",
-        "current_sync_run_id",
-        "content",
-        "reason",
-    )
-
-    def __init__(
-        self,
-        *,
-        exists: bool,
-        state: RepositoryBriefState,
-        is_stale: bool,
-        repository_id: UUID,
-        artifact_type: str = ARTIFACT_TYPE_REPOSITORY_BRIEF,
-        generated_at: datetime | None = None,
-        source_sync_run_id: UUID | None = None,
-        current_sync_run_id: UUID | None = None,
-        content: RepositoryBriefContent | None = None,
-        reason: str | None = None,
-    ) -> None:
-        self.exists = exists
-        self.state = state
-        self.is_stale = is_stale
-        self.repository_id = repository_id
-        self.artifact_type = artifact_type
-        self.generated_at = generated_at
-        self.source_sync_run_id = source_sync_run_id
-        self.current_sync_run_id = current_sync_run_id
-        self.content = content
-        self.reason = reason
+    exists: bool
+    state: RepositoryBriefState
+    is_stale: bool
+    repository_id: UUID
+    artifact_type: str = ARTIFACT_TYPE_REPOSITORY_BRIEF
+    generated_at: datetime | None = None
+    source_sync_run_id: UUID | None = None
+    current_sync_run_id: UUID | None = None
+    content: RepositoryBriefContent | None = None
+    reason: str | None = None
 
 
 class RepositoryBriefService:

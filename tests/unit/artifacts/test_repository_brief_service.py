@@ -298,3 +298,22 @@ async def test_get_brief_raises_404_when_no_repository() -> None:
 
     with pytest.raises(RepositoryNotFoundError):
         await service.get_brief(_REPO_ID)
+
+
+@pytest.mark.unit
+async def test_generate_brief_schema_version_and_generated_by() -> None:
+    """Content must always have schema_version=1 and generated_by=repository_brief_service."""
+    service, _ = _make_service(repo=_make_repo(), run=_make_run(), paths=[])
+    result = await service.generate_brief(_REPO_ID)
+    assert result.content is not None
+    assert result.content.schema_version == 1
+    assert result.content.generated_by == "repository_brief_service"
+
+
+@pytest.mark.unit
+async def test_generate_brief_commit_sha_is_none() -> None:
+    """commit_sha is always None in PR #5 — no commit SHA is stored."""
+    service, _ = _make_service(repo=_make_repo(), run=_make_run(), paths=[])
+    result = await service.generate_brief(_REPO_ID)
+    assert result.content is not None
+    assert result.content.sync.commit_sha is None
