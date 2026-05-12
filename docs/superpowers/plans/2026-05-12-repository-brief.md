@@ -136,9 +136,9 @@ make migrate
 ```
 Expected: `Running upgrade 0003 -> 0004, repository_artifacts — deterministic brief artifacts`
 
-If no DB is available, verify the migration at least imports without errors:
+If no DB is available, verify syntax only:
 ```bash
-python -c "from migrations.versions.v0004_repository_artifacts import upgrade, downgrade; print('OK')"
+python -m py_compile migrations/versions/0004_repository_artifacts.py
 ```
 Do NOT block on infrastructure. Proceed to Step 3 even if DB is unavailable; integration tests will execute the migration via testcontainers.
 
@@ -560,6 +560,7 @@ class RepositoryArtifactRepository(BaseRepository[RepositoryArtifactORM]):
             .returning(RepositoryArtifactORM)
         )
         result = await self.session.execute(stmt)
+        await self.session.flush()
         orm = result.scalar_one()
         return _orm_to_schema(orm)
 
@@ -765,13 +766,12 @@ Add to `DocumentRepository` class in `lore/infrastructure/db/repositories/docume
         self,
         repository_id: UUID,
     ) -> list[str]:
-        from sqlalchemy import distinct
-
         from lore.infrastructure.db.models.external_object import ExternalObjectORM
         from lore.infrastructure.db.models.source import SourceORM
 
         result = await self.session.execute(
-            select(distinct(DocumentORM.path))
+            select(DocumentORM.path)
+            .distinct()
             .join(SourceORM, DocumentORM.source_id == SourceORM.id)
             .join(ExternalObjectORM, SourceORM.external_object_id == ExternalObjectORM.id)
             .where(
@@ -990,8 +990,6 @@ Create `tests/unit/artifacts/test_file_categorization.py`:
 ```python
 # tests/unit/artifacts/test_file_categorization.py
 """Unit tests for pure file categorization functions in repository_brief_models."""
-import pytest
-
 from lore.artifacts.repository_brief_models import (
     categorize_paths,
     compute_signals,
@@ -1041,6 +1039,11 @@ def test_file_can_match_multiple_categories() -> None:
     assert result.markdown == 1
     assert result.tests == 1
     assert result.total == 1
+
+
+def test_contest_solver_is_not_test_file() -> None:
+    result = categorize_paths(["src/contest_solver.py"])
+    assert result.tests == 0
 
 
 def test_total_is_path_count_not_category_sum() -> None:
@@ -1323,12 +1326,16 @@ def _is_config(name_lower: str, path_lower: str) -> bool:
 
 def _is_test(path_lower: str) -> bool:
     parts = Path(path_lower).parts
-    name = Path(path_lower).name
+    stem = Path(path_lower).stem
     return (
         "tests" in parts
         or "__tests__" in parts
-        or "test" in name
-        or "spec" in name
+        or stem.startswith("test_")
+        or stem.endswith("_test")
+        or stem.endswith(".test")
+        or stem.startswith("spec_")
+        or stem.endswith("_spec")
+        or stem.endswith(".spec")
     )
 
 
@@ -2481,13 +2488,15 @@ Create `apps/api/routes/v1/repository_artifacts.py`:
 from __future__ import annotations
 
 from datetime import datetime  # noqa: TCH003
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 from uuid import UUID  # noqa: TCH003
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from lore.artifacts.repository_brief_models import RepositoryBriefServiceResult
 from lore.artifacts.repository_brief_service import RepositoryBriefService
+from lore.schema.repository_artifact import ARTIFACT_TYPE_REPOSITORY_BRIEF
 from lore.infrastructure.db.repositories.document import DocumentRepository
 from lore.infrastructure.db.repositories.external_repository import ExternalRepositoryRepository
 from lore.infrastructure.db.repositories.repository_artifact import RepositoryArtifactRepository
@@ -2504,17 +2513,17 @@ SessionDep = Annotated["AsyncSession", Depends(get_session)]
 
 class RepositoryBriefMissingResponse(BaseModel):
     repository_id: UUID
-    artifact_type: str = "repository_brief"
+    artifact_type: str = ARTIFACT_TYPE_REPOSITORY_BRIEF
     exists: bool = False
-    state: str = "missing"
+    state: Literal["missing"] = "missing"
     reason: str = "brief_not_generated"
 
 
 class RepositoryBriefPresentResponse(BaseModel):
     repository_id: UUID
-    artifact_type: str = "repository_brief"
+    artifact_type: str = ARTIFACT_TYPE_REPOSITORY_BRIEF
     exists: bool = True
-    state: str
+    state: Literal["fresh", "stale"]
     is_stale: bool
     generated_at: datetime
     source_sync_run_id: UUID
@@ -2531,7 +2540,9 @@ def _build_brief_service(session: AsyncSession) -> RepositoryBriefService:
     )
 
 
-def _to_response(result):  # type: ignore[no-untyped-def]
+def _to_response(
+    result: RepositoryBriefServiceResult,
+) -> RepositoryBriefMissingResponse | RepositoryBriefPresentResponse:
     if not result.exists:
         return RepositoryBriefMissingResponse(repository_id=result.repository_id)
     return RepositoryBriefPresentResponse(
@@ -2589,18 +2600,19 @@ from apps.api.routes.v1.repository_artifacts import router as repository_artifac
 make test-integration
 ```
 
-Expected: all 7 new API tests PASS
+Expected: all 8 new API tests PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add \
   apps/api/routes/v1/repository_artifacts.py \
+  apps/api/main.py \
   tests/integration/test_repository_brief_api.py
 git commit -m "feat(api): add GET /brief and POST /brief/generate endpoints"
 ```
 
-Note: `apps/api/main.py` and `apps/api/exception_handlers.py` were committed in Task 7.
+Note: `apps/api/exception_handlers.py` was committed in Task 7. `apps/api/main.py` is modified twice (Task 7: handlers; Task 9: router). Stage it here with the router registration.
 
 ---
 
@@ -2630,20 +2642,7 @@ Expected: no errors. Fix any issues before proceeding.
 make type-check
 ```
 
-Expected: no errors. Common fixes needed:
-- Add `# type: ignore[return-value]` to `_to_response()` if mypy complains about Union return type, or use explicit `Union` annotation
-- The `_to_response` function needs a typed return. Update it:
-
-```python
-def _to_response(
-    result: RepositoryBriefServiceResult,
-) -> RepositoryBriefMissingResponse | RepositoryBriefPresentResponse:
-```
-
-And add to imports at top of route file:
-```python
-from lore.artifacts.repository_brief_models import RepositoryBriefServiceResult
-```
+Expected: no errors. `_to_response` is already typed; no `type: ignore` needed.
 
 - [ ] **Step 4: Run all tests**
 
