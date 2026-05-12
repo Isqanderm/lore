@@ -2544,7 +2544,17 @@ def _to_response(
     result: RepositoryBriefServiceResult,
 ) -> RepositoryBriefMissingResponse | RepositoryBriefPresentResponse:
     if not result.exists:
-        return RepositoryBriefMissingResponse(repository_id=result.repository_id)
+        return RepositoryBriefMissingResponse(
+            repository_id=result.repository_id,
+            reason=result.reason or "brief_not_generated",
+        )
+
+    assert result.state in ("fresh", "stale")
+    assert result.is_stale is not None
+    assert result.generated_at is not None
+    assert result.source_sync_run_id is not None
+    assert result.content is not None
+
     return RepositoryBriefPresentResponse(
         repository_id=result.repository_id,
         state=result.state,
