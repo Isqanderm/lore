@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime  # noqa: TCH003
 from pathlib import Path
 from typing import Literal
 
@@ -43,7 +42,7 @@ class RepositoryBriefRepositoryInfo:
 @dataclass(frozen=True)
 class RepositoryBriefSyncInfo:
     sync_run_id: str
-    last_synced_at: datetime | None
+    last_synced_at: str | None
     commit_sha: None = None
 
 
@@ -129,7 +128,7 @@ def _is_test(path_str: str) -> bool:
     return stem.startswith("test_") or stem.endswith("_test") or stem.endswith(".test")
 
 
-def _categorize_paths(paths: list[str]) -> RepositoryBriefStats:
+def categorize_paths(paths: list[str]) -> RepositoryBriefStats:
     total = len(paths)
     markdown = source = config = test = 0
     for p in paths:
@@ -157,7 +156,7 @@ def _is_github_workflow(path_str: str) -> bool:
     return len(parts_lower) >= 3 and parts_lower[-3] == ".github" and parts_lower[-2] == "workflows"
 
 
-def _detect_important_files(paths: list[str]) -> list[ImportantFileEntry]:
+def detect_important_files(paths: list[str]) -> list[ImportantFileEntry]:
     results: list[ImportantFileEntry] = []
     for path_str in paths:
         p = Path(path_str)
@@ -182,7 +181,7 @@ def _detect_important_files(paths: list[str]) -> list[ImportantFileEntry]:
     return results
 
 
-def _detect_signals(
+def detect_signals(
     important_files: list[ImportantFileEntry],
     stats: RepositoryBriefStats | None = None,
 ) -> RepositoryBriefSignals:
@@ -197,7 +196,7 @@ def _detect_signals(
     )
 
 
-def _get_language_counts(paths: list[str]) -> list[LanguageEntry]:
+def get_language_counts(paths: list[str]) -> list[LanguageEntry]:
     counts: dict[str, int] = {}
     for path_str in paths:
         ext = Path(path_str).suffix.lower()

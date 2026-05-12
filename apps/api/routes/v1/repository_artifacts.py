@@ -47,18 +47,13 @@ class RepositoryBriefPresentResponse(BaseModel):
     brief: dict[str, Any]
 
 
-async def _get_brief_service(
-    session: SessionDep,
-) -> RepositoryBriefService:
+def _build_brief_service(session: AsyncSession) -> RepositoryBriefService:
     return RepositoryBriefService(
         external_repository_repo=ExternalRepositoryRepository(session),
         sync_run_repo=RepositorySyncRunRepository(session),
         document_repo=DocumentRepository(session),
         artifact_repo=RepositoryArtifactRepository(session),
     )
-
-
-BriefServiceDep = Annotated[RepositoryBriefService, Depends(_get_brief_service)]
 
 
 def _to_response(
@@ -88,16 +83,19 @@ def _to_response(
 @router.get("/repositories/{repository_id}/brief")
 async def get_repository_brief(
     repository_id: UUID,
-    brief_service: BriefServiceDep,
+    session: SessionDep,
 ) -> RepositoryBriefMissingResponse | RepositoryBriefPresentResponse:
+    brief_service = _build_brief_service(session)
     result = await brief_service.get_brief(repository_id)
     return _to_response(result)
 
 
-@router.post("/repositories/{repository_id}/brief/generate", status_code=201)
+@router.post("/repositories/{repository_id}/brief/generate")
 async def generate_repository_brief(
     repository_id: UUID,
-    brief_service: BriefServiceDep,
+    session: SessionDep,
 ) -> RepositoryBriefPresentResponse:
+    brief_service = _build_brief_service(session)
     result = await brief_service.generate_brief(repository_id)
+    await session.commit()
     return _to_response(result)  # type: ignore[return-value]

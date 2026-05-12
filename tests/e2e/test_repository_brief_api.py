@@ -164,7 +164,7 @@ async def test_generate_brief_creates_brief(
     await _seed_sync_run(db_session, repo)
 
     response = await app_client_with_db.post(f"/api/v1/repositories/{repo.id}/brief/generate")
-    assert response.status_code == 201
+    assert response.status_code == 200
     data = response.json()
     assert data["state"] == "fresh"
     assert data["exists"] is True
@@ -227,7 +227,7 @@ async def test_generate_brief_again_makes_fresh(
     await _seed_sync_run(db_session, repo)
 
     response = await app_client_with_db.post(f"/api/v1/repositories/{repo.id}/brief/generate")
-    assert response.status_code == 201
+    assert response.status_code == 200
     data = response.json()
     assert data["state"] == "fresh"
     assert data["is_stale"] is False
@@ -258,7 +258,7 @@ async def test_generate_brief_with_real_documents(
     await _seed_document(db_session, repo, "src/app.py", object_type="github.file")
 
     response = await app_client_with_db.post(f"/api/v1/repositories/{repo.id}/brief/generate")
-    assert response.status_code == 201
+    assert response.status_code == 200
     data = response.json()
     assert data["state"] == "fresh"
     stats = data["brief"]["stats"]

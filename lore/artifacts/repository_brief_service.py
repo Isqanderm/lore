@@ -16,10 +16,10 @@ from lore.artifacts.repository_brief_models import (
     RepositoryBriefState,
     RepositoryBriefStats,
     RepositoryBriefSyncInfo,
-    _categorize_paths,
-    _detect_important_files,
-    _detect_signals,
-    _get_language_counts,
+    categorize_paths,
+    detect_important_files,
+    detect_signals,
+    get_language_counts,
 )
 from lore.schema.repository_artifact import ARTIFACT_TYPE_REPOSITORY_BRIEF, RepositoryArtifact
 from lore.sync.errors import RepositoryNotFoundError
@@ -81,16 +81,6 @@ def _content_from_dict(d: dict) -> RepositoryBriefContent:  # type: ignore[type-
     )
 
 
-def _content_to_json_safe_dict(content: RepositoryBriefContent) -> dict:  # type: ignore[type-arg]
-    """Convert RepositoryBriefContent to a JSON-safe dict (datetime → ISO string)."""
-    d = dataclasses.asdict(content)
-    sync = d.get("sync", {})
-    if isinstance(sync.get("last_synced_at"), datetime):
-        sync["last_synced_at"] = sync["last_synced_at"].isoformat()
-    d["sync"] = sync
-    return d
-
-
 @dataclass(frozen=True)
 class RepositoryBriefServiceResult:
     exists: bool
@@ -130,10 +120,10 @@ class RepositoryBriefService:
 
         paths = await self._document_repo.get_document_paths_by_repository_id(repository_id)
 
-        stats = _categorize_paths(paths)
-        important_files = _detect_important_files(paths)
-        signals = _detect_signals(important_files, stats)
-        languages = _get_language_counts(paths)
+        stats = categorize_paths(paths)
+        important_files = detect_important_files(paths)
+        signals = detect_signals(important_files, stats)
+        languages = get_language_counts(paths)
 
         content = RepositoryBriefContent(
             repository=RepositoryBriefRepositoryInfo(
@@ -145,7 +135,9 @@ class RepositoryBriefService:
             ),
             sync=RepositoryBriefSyncInfo(
                 sync_run_id=str(latest_run.id),
-                last_synced_at=latest_run.finished_at,
+                last_synced_at=latest_run.finished_at.isoformat()
+                if latest_run.finished_at
+                else None,
             ),
             stats=stats,
             languages=languages,
@@ -156,13 +148,12 @@ class RepositoryBriefService:
         )
 
         now = datetime.now(UTC)
-        content_json = _content_to_json_safe_dict(content)
         artifact = RepositoryArtifact(
             id=uuid4(),
             repository_id=repository_id,
             artifact_type=ARTIFACT_TYPE_REPOSITORY_BRIEF,
             title=f"Repository Brief: {repo.full_name}",
-            content_json=content_json,
+            content_json=dataclasses.asdict(content),
             source_sync_run_id=latest_run.id,
             generated_at=now,
             created_at=now,
