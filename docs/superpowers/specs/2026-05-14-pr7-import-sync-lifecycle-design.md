@@ -67,6 +67,12 @@ class ImportResult:
     sync_run_id: UUID
 ```
 
+**RepositoryImportService docstring** — update to reflect new responsibility:
+
+```python
+"""Orchestrates repository discovery, then delegates initial sync to RepositorySyncService."""
+```
+
 **RepositoryImportService constructor** — remove `ingestion`, add `sync_service`:
 
 ```python
@@ -158,7 +164,11 @@ def _build_import_service(
 
 Note: `IngestionService`, `ExternalObjectRepository`, `SourceRepository`, `DocumentRepository`, `DocumentVersionRepository` are no longer constructed in `_build_import_service()` — they're already built inside `_build_sync_service()`.
 
-**`import_repository` route** — add `except Exception` block, mirror sync route:
+**`import_repository` route** — add `except Exception` block, mirror sync route.
+
+Note: `except Exception` commits the session before re-raising. If the failure occurred after `get_or_create` (connection/repo) but before the sync run was created, those records will be committed. This is acceptable: a failed import may leave an `ExternalRepository` as diagnostic state, consistent with manual sync behavior.
+
+
 
 ```python
 @router.post("/import", response_model=ImportResponse)
@@ -221,6 +231,8 @@ class _FailingFakeConnector(_FakeConnector):
 Tests for `RepositoryImportService` as thin orchestration. No DB, no HTTP. Uses fake repositories and `FakeRepositorySyncService`.
 
 ```python
+from lore.sync.models import RepositorySyncResult  # must use real dataclass
+
 class FakeRepositorySyncService:
     def __init__(self, result: RepositorySyncResult) -> None:
         self.result = result
@@ -231,12 +243,14 @@ class FakeRepositorySyncService:
         return self.result
 ```
 
+`FakeRepositorySyncService` must return a real `RepositorySyncResult` (not an ad-hoc object). This ensures that field mismatches between `RepositorySyncResult` and `ImportResult` mapping are caught by the test.
+
 Required tests:
 
 | Test | Asserts |
 |---|---|
 | `test_import_delegates_to_sync_service_with_import_trigger` | `sync_service.calls == [(repo.id, "import", "full")]` |
-| `test_import_returns_sync_result_fields` | `ImportResult.status`, `sync_run_id`, `report.*` match `RepositorySyncResult` |
+| `test_import_returns_sync_result_fields` | `ImportResult.status`, `sync_run_id`, `report.*` (including `versions_skipped`) match `RepositorySyncResult` |
 | `test_import_does_not_call_full_sync_directly` | fake connector's `full_sync` raises `AssertionError`; test passes because service never calls it |
 | `test_import_connector_not_found_propagates` | `ConnectorNotFoundError` is not caught by service |
 
@@ -251,9 +265,9 @@ Required tests:
 |---|---|
 | `test_import_creates_sync_run_with_import_trigger` | DB has `RepositorySyncRunORM` with `trigger="import"`, `mode="full"`, `status="succeeded"` |
 | `test_imported_documents_have_sync_tracking` | `document.first_seen_sync_run_id == import_sync_run_id` and `last_seen_sync_run_id == import_sync_run_id` |
-| `test_brief_can_be_generated_after_import` | POST import → POST brief → 200, `stats.total_files > 0` |
+| `test_brief_can_be_generated_after_successful_import` | POST import (succeeded) → POST brief → 200, `stats.total_files > 0` |
 | `test_partial_import_creates_partial_sync_run` | fake returns warnings → response `status="partial"`, DB run `status="partial"` |
-| `test_failed_import_persists_failed_sync_run` | fake fails in `full_sync` → 500, DB has run with `status="failed"` |
+| `test_failed_import_persists_failed_sync_run` | fake fails in `full_sync` → 500; find repo by `full_name` in DB (not from 500 response), assert `RepositorySyncRunORM.trigger="import"`, `status="failed"` |
 | `test_import_provenance_in_document_version` | `DocumentVersionORM.metadata_` contains `commit_sha`, `external_id`, `raw_payload_hash` |
 
 ### C. Delete old integration file
