@@ -15,6 +15,10 @@ class Document:
     document_kind: str | None = None
     logical_path: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    is_active: bool = True
+    deleted_at: datetime | None = None
+    first_seen_sync_run_id: UUID | None = None
+    last_seen_sync_run_id: UUID | None = None
 
 
 @dataclass(frozen=True)

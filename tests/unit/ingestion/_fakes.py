@@ -89,6 +89,7 @@ class FakeSourceRepository:
 class FakeDocumentRepository:
     def __init__(self) -> None:
         self.documents: list[Document] = []
+        self.seen_in_sync_calls: list[tuple[UUID, UUID]] = []  # (document_id, sync_run_id)
 
     async def get_by_source_kind_path(
         self, source_id: UUID, document_kind: str, logical_path: str | None
@@ -107,6 +108,9 @@ class FakeDocumentRepository:
     async def create(self, doc: Document) -> Document:
         self.documents.append(doc)
         return doc
+
+    async def mark_seen_in_sync(self, document_id: UUID, sync_run_id: UUID) -> None:
+        self.seen_in_sync_calls.append((document_id, sync_run_id))
 
 
 class FakeDocumentVersionRepository:

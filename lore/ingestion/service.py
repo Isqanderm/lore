@@ -38,6 +38,7 @@ class IngestionService:
         self,
         sync_result: SyncResult,
         connector: BaseConnector,
+        sync_run_id: UUID | None = None,
     ) -> IngestionReport:
         report = IngestionReport(warnings=list(sync_result.warnings))
         for raw in sync_result.raw_objects:
@@ -46,7 +47,7 @@ class IngestionService:
             drafts = connector.normalize(raw)
             for draft in drafts:
                 created_doc, created_version = await self._upsert_document(
-                    draft, raw, external_object_id=persisted.id
+                    draft, raw, external_object_id=persisted.id, sync_run_id=sync_run_id
                 )
                 if created_doc:
                     report.documents_created += 1
@@ -64,6 +65,7 @@ class IngestionService:
         draft: CanonicalDocumentDraft,
         raw: RawExternalObject,
         external_object_id: UUID,
+        sync_run_id: UUID | None = None,
     ) -> tuple[bool, bool]:
         """Return (document_created, version_created)."""
         # 1. Find or create source
@@ -106,12 +108,17 @@ class IngestionService:
             )
             doc_created = True
 
-        # 3. Check idempotency via checksum
+        # 3. Mark document as seen in this sync — BEFORE checksum check
+        #    A file can be unchanged in content but still present; it must update last_seen.
+        if sync_run_id is not None:
+            await self._doc_repo.mark_seen_in_sync(doc.id, sync_run_id)
+
+        # 4. Check idempotency via checksum
         latest = await self._dv_repo.get_latest_version(doc.id)
         if latest is not None and latest.checksum == draft.content_hash:
             return doc_created, False  # same content — skip
 
-        # 4. Create new version with provenance snapshot in metadata
+        # 5. Create new version with provenance snapshot in metadata
         max_version = await self._dv_repo.get_max_version(doc.id)
         provenance_snapshot: dict[str, Any] = {
             "external_id": raw.external_id,

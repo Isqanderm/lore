@@ -100,7 +100,7 @@ def _build_sync_service(
     dv_repo = DocumentVersionRepository(session)
     sync_run_repo = RepositorySyncRunRepository(session)
     ingestion = IngestionService(ext_obj_repo, source_repo, doc_repo, dv_repo)
-    return RepositorySyncService(registry, ingestion, ext_repo_repo, sync_run_repo)
+    return RepositorySyncService(registry, ingestion, ext_repo_repo, sync_run_repo, doc_repo)
 
 
 @router.post("/import", response_model=ImportResponse)
