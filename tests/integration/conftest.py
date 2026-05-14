@@ -84,7 +84,7 @@ async def app_with_db(db_session: AsyncSession) -> AsyncGenerator[FastAPI, None]
     app.dependency_overrides[get_session] = lambda: db_session
     yield app
     app.dependency_overrides.clear()
-    with contextlib.suppress(AttributeError):
+    with contextlib.suppress(AttributeError, KeyError):
         del app.state.connector_registry
 
 
