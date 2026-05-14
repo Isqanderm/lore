@@ -38,9 +38,11 @@ from lore.infrastructure.db.repositories.external_object import ExternalObjectRe
 from lore.infrastructure.db.repositories.external_repository import (
     ExternalRepositoryRepository,
 )
+from lore.infrastructure.db.repositories.repository_sync_run import RepositorySyncRunRepository
 from lore.infrastructure.db.repositories.source import SourceRepository
 from lore.ingestion.repository_import import RepositoryImportService
 from lore.ingestion.service import IngestionService
+from lore.sync.service import RepositorySyncService
 from tests.integration.connectors.conftest import canonical_hash, content_hash
 
 if TYPE_CHECKING:
@@ -139,11 +141,18 @@ def _build_import_service(session: AsyncSession) -> RepositoryImportService:
         document_repo=DocumentRepository(session),
         document_version_repo=DocumentVersionRepository(session),
     )
-    return RepositoryImportService(
+    sync_service = RepositorySyncService(
         registry=registry,
         ingestion=ingestion,
+        ext_repo_repo=ExternalRepositoryRepository(session),
+        sync_run_repo=RepositorySyncRunRepository(session),
+        document_repo=DocumentRepository(session),
+    )
+    return RepositoryImportService(
+        registry=registry,
         ext_connection_repo=ExternalConnectionRepository(session),
         ext_repository_repo=ExternalRepositoryRepository(session),
+        sync_service=sync_service,
     )
 
 
@@ -155,14 +164,14 @@ async def test_repeated_import_no_duplicate_versions(db_session: AsyncSession) -
     result1 = await service.import_repository(
         "https://github.com/stable/repo-idempotency", "github"
     )
-    assert result1.status == "synced"
+    assert result1.status == "succeeded"
     assert result1.report.versions_created == 1
 
     # Second import — same content, must skip version creation
     result2 = await service.import_repository(
         "https://github.com/stable/repo-idempotency", "github"
     )
-    assert result2.status == "synced"
+    assert result2.status == "succeeded"
     assert result2.report.versions_created == 0
     assert result2.report.versions_skipped == 1
 
