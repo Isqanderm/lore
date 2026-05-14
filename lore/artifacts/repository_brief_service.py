@@ -118,7 +118,7 @@ class RepositoryBriefService:
         if latest_run is None:
             raise RepositoryNotSyncedError(repository_id)
 
-        paths = await self._document_repo.get_document_paths_by_repository_id(repository_id)
+        paths = await self._document_repo.get_active_document_paths_by_repository_id(repository_id)
 
         stats = categorize_paths(paths)
         important_files = detect_important_files(paths)
