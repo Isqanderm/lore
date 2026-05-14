@@ -41,7 +41,7 @@ class RepositoryArtifactORM(Base):
     __table_args__ = (
         UniqueConstraint("repository_id", "artifact_type", name="uq_repository_artifact_type"),
         CheckConstraint(
-            "artifact_type IN ('repository_brief')",
+            "artifact_type IN ('repository_brief', 'repository_structure')",
             name="ck_repository_artifact_type",
         ),
         sa.Index("ix_repository_artifacts_repository_id", "repository_id"),
