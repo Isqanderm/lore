@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+import sqlalchemy as sa
 from sqlalchemy import DateTime, ForeignKey, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -21,6 +22,16 @@ class DocumentORM(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(
+        nullable=False, server_default=sa.text("true"), index=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_seen_sync_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("repository_sync_runs.id"), nullable=True, index=True
+    )
+    last_seen_sync_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("repository_sync_runs.id"), nullable=True, index=True
     )
     document_kind: Mapped[str | None] = mapped_column(nullable=True, index=True)
     logical_path: Mapped[str | None] = mapped_column(nullable=True, index=True)
