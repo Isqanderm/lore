@@ -88,6 +88,21 @@ class DocumentRepository(BaseRepository[DocumentORM]):
         )
         return list(result.scalars().all())
 
+    async def get_active_document_paths_by_repository_id(self, repository_id: UUID) -> list[str]:
+        result = await self.session.execute(
+            select(DocumentORM.path)
+            .distinct()
+            .join(SourceORM, DocumentORM.source_id == SourceORM.id)
+            .join(ExternalObjectORM, SourceORM.external_object_id == ExternalObjectORM.id)
+            .where(
+                ExternalObjectORM.repository_id == repository_id,
+                ExternalObjectORM.object_type == _GITHUB_FILE_OBJECT_TYPE,
+                DocumentORM.is_active.is_(True),
+            )
+            .order_by(DocumentORM.path)
+        )
+        return list(result.scalars().all())
+
     async def get_by_source_kind_path(
         self,
         source_id: UUID,
