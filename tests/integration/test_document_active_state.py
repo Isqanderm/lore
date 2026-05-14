@@ -198,3 +198,56 @@ async def test_c_non_file_object_type_excluded(db_session: AsyncSession) -> None
     )
 
     assert "repo_root" not in result
+
+
+# ── D: mark_seen_in_sync activates inactive doc, sets both sync IDs ───────────
+
+
+async def test_d_mark_seen_in_sync_activates_doc(db_session: AsyncSession) -> None:
+    repo = await _seed_conn_and_repo(db_session)
+    run = await _seed_sync_run(db_session, repo)
+    eo = await _seed_ext_object(db_session, repo, "github.file", "file:lib.py")
+    src = await _seed_source(db_session, eo)
+    doc = await _seed_document(
+        db_session,
+        src,
+        "lib.py",
+        is_active=False,
+        deleted_at=datetime.now(UTC),
+        first_seen_sync_run_id=None,
+    )
+
+    await DocumentRepository(db_session).mark_seen_in_sync(doc.id, run.id)
+    await db_session.flush()
+
+    await db_session.refresh(doc)
+    assert doc.is_active is True
+    assert doc.deleted_at is None
+    assert doc.last_seen_sync_run_id == run.id
+    assert doc.first_seen_sync_run_id == run.id  # was NULL → set via COALESCE
+
+
+# ── E: mark_seen_in_sync preserves existing first_seen_sync_run_id ────────────
+
+
+async def test_e_mark_seen_in_sync_preserves_first_seen(db_session: AsyncSession) -> None:
+    repo = await _seed_conn_and_repo(db_session)
+    old_run = await _seed_sync_run(db_session, repo)
+    new_run = await _seed_sync_run(db_session, repo)
+    eo = await _seed_ext_object(db_session, repo, "github.file", "file:main.py")
+    src = await _seed_source(db_session, eo)
+    doc = await _seed_document(
+        db_session,
+        src,
+        "main.py",
+        is_active=True,
+        first_seen_sync_run_id=old_run.id,
+        last_seen_sync_run_id=old_run.id,
+    )
+
+    await DocumentRepository(db_session).mark_seen_in_sync(doc.id, new_run.id)
+    await db_session.flush()
+
+    await db_session.refresh(doc)
+    assert doc.first_seen_sync_run_id == old_run.id  # unchanged
+    assert doc.last_seen_sync_run_id == new_run.id  # updated

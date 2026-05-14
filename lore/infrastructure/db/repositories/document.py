@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from lore.infrastructure.db.models.document import DocumentORM, DocumentVersionORM
 from lore.infrastructure.db.models.external_object import ExternalObjectORM
@@ -102,6 +102,23 @@ class DocumentRepository(BaseRepository[DocumentORM]):
             .order_by(DocumentORM.path)
         )
         return list(result.scalars().all())
+
+    async def mark_seen_in_sync(self, document_id: UUID, sync_run_id: UUID) -> None:
+        stmt = (
+            update(DocumentORM)
+            .where(DocumentORM.id == document_id)
+            .values(
+                is_active=True,
+                deleted_at=None,
+                first_seen_sync_run_id=func.coalesce(
+                    DocumentORM.first_seen_sync_run_id, sync_run_id
+                ),
+                last_seen_sync_run_id=sync_run_id,
+                updated_at=func.now(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        await self.session.execute(stmt)
 
     async def get_by_source_kind_path(
         self,
