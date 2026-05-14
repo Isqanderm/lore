@@ -177,6 +177,10 @@ async def test_l_brief_excludes_inactive_documents(db_session: AsyncSession) -> 
     assert result.content is not None
     # Only README.md is active — total_files must be 1
     assert result.content.stats.total_files == 1
+    # deleted.py is a .py source file — source_files must not count it
+    assert result.content.stats.source_files == 0
     # deleted.py must not appear in any path-derived list
     paths_in_important = [f.path for f in result.content.important_files]
     assert "deleted.py" not in paths_in_important
+    # .py extension must not appear in language stats (deleted.py is inactive)
+    assert all(lang.extension != ".py" for lang in result.content.languages)

@@ -39,8 +39,31 @@ async def _column_nullable(engine: AsyncEngine, table: str, column: str) -> bool
         return scalar_result == "YES"
 
 
+async def _column_default(engine: AsyncEngine, table: str, column: str) -> str | None:
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            sqlalchemy.text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_name = :table AND column_name = :column"
+            ),
+            {"table": table, "column": column},
+        )
+        scalar_result = result.scalar()
+        return str(scalar_result) if scalar_result is not None else None
+
+
 async def test_m_is_active_column_exists(db_engine: AsyncEngine) -> None:
     assert await _column_exists(db_engine, "documents", "is_active")
+
+
+async def test_m_is_active_not_nullable(db_engine: AsyncEngine) -> None:
+    assert not await _column_nullable(db_engine, "documents", "is_active")
+
+
+async def test_m_is_active_default_true(db_engine: AsyncEngine) -> None:
+    default = await _column_default(db_engine, "documents", "is_active")
+    assert default is not None
+    assert "true" in default.lower()
 
 
 async def test_m_deleted_at_column_exists_and_nullable(db_engine: AsyncEngine) -> None:
