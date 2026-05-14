@@ -88,6 +88,9 @@ class FakeDocumentRepository:
     async def get_document_paths_by_repository_id(self, repository_id: UUID) -> list[str]:
         return list(self._paths)
 
+    async def get_active_document_paths_by_repository_id(self, repository_id: UUID) -> list[str]:
+        return list(self._paths)
+
 
 class FakeRepositoryArtifactRepository:
     def __init__(self) -> None:
