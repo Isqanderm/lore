@@ -27,6 +27,10 @@ def _doc_orm_to_schema(orm: DocumentORM) -> Document:
         document_kind=orm.document_kind,
         logical_path=orm.logical_path,
         metadata=orm.metadata_,
+        is_active=orm.is_active,
+        deleted_at=orm.deleted_at,
+        first_seen_sync_run_id=orm.first_seen_sync_run_id,
+        last_seen_sync_run_id=orm.last_seen_sync_run_id,
     )
 
 
@@ -56,6 +60,10 @@ class DocumentRepository(BaseRepository[DocumentORM]):
             metadata_=doc.metadata,
             created_at=doc.created_at,
             updated_at=doc.updated_at,
+            is_active=doc.is_active,
+            deleted_at=doc.deleted_at,
+            first_seen_sync_run_id=doc.first_seen_sync_run_id,
+            last_seen_sync_run_id=doc.last_seen_sync_run_id,
         )
         self.session.add(orm)
         await self.session.flush()
