@@ -15,6 +15,7 @@
 | File | Action |
 |---|---|
 | `lore/schema/repository_artifact.py` | Add `ARTIFACT_TYPE_REPOSITORY_STRUCTURE` constant |
+| `lore/infrastructure/db/models/repository_artifact.py` | Update `CheckConstraint` to allow `repository_structure` |
 | `lore/artifacts/repository_structure_models.py` | **New** — frozen dataclasses + 7 pure classification functions |
 | `lore/artifacts/repository_structure_service.py` | **New** — `RepositoryStructureService` with `generate_structure` / `get_structure` |
 | `migrations/versions/0006_repository_structure_artifact_type.py` | **New** — expand `ck_repository_artifact_type` constraint |
@@ -25,6 +26,8 @@
 | `tests/integration/test_repository_structure_api.py` | **New** — API lifecycle tests A–F |
 
 `apps/api/main.py` — **do not modify**. `tests/unit/artifacts/_fakes.py` — modify only if a new method is needed.
+
+> **Why the ORM model must also be updated:** Integration tests use `Base.metadata.create_all` to build the test DB schema, bypassing Alembic. If `RepositoryArtifactORM.__table_args__` still has `artifact_type IN ('repository_brief')`, the test DB will reject `repository_structure` inserts even though migration 0006 is correct.
 
 ---
 
@@ -219,6 +222,11 @@ def test_detect_manifests_sorted_by_path() -> None:
     assert manifests[1].path == "zzz/package.json"
 
 
+def test_detect_manifests_deduplicates_paths() -> None:
+    manifests = detect_manifests(["package.json", "package.json"])
+    assert manifests == [ManifestEntry(path="package.json", kind="node.package")]
+
+
 # ---------------------------------------------------------------------------
 # detect_entrypoint_candidates
 # ---------------------------------------------------------------------------
@@ -266,6 +274,18 @@ def test_detect_entrypoint_candidates_sorted() -> None:
     paths = ["zzz/server.js", "aaa/app.py"]
     candidates = detect_entrypoint_candidates(paths)
     assert candidates[0].path == "aaa/app.py"
+
+
+def test_detect_entrypoint_nested_go_cmd_pattern() -> None:
+    """Go cmd rule must match nested paths, not only root-level."""
+    candidates = detect_entrypoint_candidates(["services/api/cmd/server/main.go"])
+    assert len(candidates) == 1
+    assert candidates[0].kind == "go.main"
+
+
+def test_detect_entrypoints_deduplicates_paths() -> None:
+    candidates = detect_entrypoint_candidates(["app.py", "app.py"])
+    assert candidates == [EntrypointCandidate(path="app.py", kind="python.app")]
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +337,12 @@ def test_detect_infrastructure_lists_sorted() -> None:
     paths = ["zzz/Dockerfile", "aaa/docker-compose.yml"]
     infra = detect_infrastructure(paths)
     assert infra.docker_files == sorted(infra.docker_files)
+
+
+def test_detect_infrastructure_deduplicates_paths() -> None:
+    infra = detect_infrastructure(["Dockerfile", "Dockerfile", ".github/workflows/ci.yml", ".github/workflows/ci.yml"])
+    assert infra.docker_files == ["Dockerfile"]
+    assert infra.ci_files == [".github/workflows/ci.yml"]
 
 
 # ---------------------------------------------------------------------------
@@ -605,15 +631,15 @@ def get_top_level_directories(paths: list[str]) -> list[TopLevelDirectoryEntry]:
 
 
 def detect_manifests(paths: list[str]) -> list[ManifestEntry]:
-    result: list[ManifestEntry] = []
+    entries: dict[str, ManifestEntry] = {}
     for p in paths:
         n = normalize_path(p)
         if not n:
             continue
         kind = _MANIFEST_BASENAMES.get(Path(n).name)
         if kind is not None:
-            result.append(ManifestEntry(path=n, kind=kind))
-    return sorted(result, key=lambda e: e.path)
+            entries[n] = ManifestEntry(path=n, kind=kind)
+    return sorted(entries.values(), key=lambda e: e.path)
 
 
 def _detect_entrypoint_kind(path: str) -> str | None:
@@ -625,7 +651,7 @@ def _detect_entrypoint_kind(path: str) -> str | None:
         return "node.entry_candidate"
     if path == "src/main.ts" or path.endswith("/src/main.ts"):
         return "node.entry_candidate"
-    if re.match(r"^cmd/[^/]+/main\.go$", path):
+    if re.search(r"(^|/)cmd/[^/]+/main\.go$", path):
         return "go.main"
     # Generic basename rules
     basename = Path(path).name
@@ -641,20 +667,20 @@ def _detect_entrypoint_kind(path: str) -> str | None:
 
 
 def detect_entrypoint_candidates(paths: list[str]) -> list[EntrypointCandidate]:
-    result: list[EntrypointCandidate] = []
+    entries: dict[str, EntrypointCandidate] = {}
     for p in paths:
         n = normalize_path(p)
         if not n:
             continue
         kind = _detect_entrypoint_kind(n)
         if kind is not None:
-            result.append(EntrypointCandidate(path=n, kind=kind))
-    return sorted(result, key=lambda e: e.path)
+            entries[n] = EntrypointCandidate(path=n, kind=kind)
+    return sorted(entries.values(), key=lambda e: e.path)
 
 
 def detect_infrastructure(paths: list[str]) -> RepositoryStructureInfrastructure:
-    docker_files: list[str] = []
-    ci_files: list[str] = []
+    docker_files: set[str] = set()
+    ci_files: set[str] = set()
     migration_dirs_set: set[str] = set()
 
     for p in paths:
@@ -664,17 +690,17 @@ def detect_infrastructure(paths: list[str]) -> RepositoryStructureInfrastructure
         parts = n.split("/")
         basename = parts[-1]
 
-        # Docker files — basename matching
+        # Docker files — basename matching; use set for dedup
         if basename == "Dockerfile" or basename.startswith("Dockerfile.") or basename in _DOCKER_BASENAMES:
-            docker_files.append(n)
+            docker_files.add(n)
 
-        # CI files — path prefix matching (not basename)
+        # CI files — path prefix matching (not basename); use set for dedup
         if n.startswith(".github/workflows/") and (n.endswith(".yml") or n.endswith(".yaml")):
-            ci_files.append(n)
+            ci_files.add(n)
         elif n == ".gitlab-ci.yml":
-            ci_files.append(n)
+            ci_files.add(n)
         elif n.startswith(".circleci/"):
-            ci_files.append(n)
+            ci_files.add(n)
 
         # Migration dirs — scan directory components (exclude the filename)
         dir_parts = parts[:-1]
@@ -835,10 +861,11 @@ async def test_generate_structure_creates_artifact_from_active_paths() -> None:
     assert result.content.stats.total_active_files == 4
     assert result.content.stats.manifest_count == 1  # pyproject.toml
     assert result.content.stats.entrypoint_candidate_count == 1  # apps/api/main.py
-    # Artifact must be persisted
-    assert artifact_repo._artifact is not None
-    assert artifact_repo._artifact.artifact_type == "repository_structure"
-    assert artifact_repo._artifact.source_sync_run_id == _RUN_ID
+    # Verify artifact was persisted via the public fake method
+    persisted = await artifact_repo.get_by_repository_and_type(_REPO_ID, "repository_structure")
+    assert persisted is not None
+    assert persisted.artifact_type == "repository_structure"
+    assert persisted.source_sync_run_id == _RUN_ID
 
 
 async def test_generate_structure_empty_paths_is_valid() -> None:
@@ -1269,10 +1296,29 @@ def downgrade() -> None:
     )
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 2: Update RepositoryArtifactORM CheckConstraint**
+
+Open `lore/infrastructure/db/models/repository_artifact.py`. Find `__table_args__` and update the `CheckConstraint`:
+
+```python
+# Change this:
+CheckConstraint(
+    "artifact_type IN ('repository_brief')",
+    name="ck_repository_artifact_type",
+),
+# To this:
+CheckConstraint(
+    "artifact_type IN ('repository_brief', 'repository_structure')",
+    name="ck_repository_artifact_type",
+),
+```
+
+The `UniqueConstraint`, indexes, and `ForeignKeyConstraint`s remain unchanged.
+
+- [ ] **Step 3: Commit**
 
 ```bash
-git add migrations/versions/0006_repository_structure_artifact_type.py
+git add migrations/versions/0006_repository_structure_artifact_type.py lore/infrastructure/db/models/repository_artifact.py
 git commit -m "feat: migration 0006 — expand repository_artifacts check constraint for repository_structure"
 ```
 
@@ -2007,6 +2053,7 @@ async def test_f_generate_structure_without_succeeded_sync_returns_409(
     )
     db_session.add(repo)
     await db_session.flush()
+    await db_session.commit()  # ensure row is visible to the route handler's session
 
     resp = await app_client_with_db.post(
         f"/api/v1/repositories/{repo.id}/structure/generate"
