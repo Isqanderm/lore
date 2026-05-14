@@ -121,6 +121,8 @@ async def import_repository(
     except ExternalResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
+        # Commit in case a sync run was already created and marked failed before the ValueError.
+        await session.commit()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         # If sync run was created before failure, mark_failed() was flushed —
