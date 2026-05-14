@@ -113,7 +113,9 @@ async def test_import_endpoint_returns_200(
     data = response.json()
     assert "repository_id" in data
     assert UUID(data["repository_id"])  # valid UUID
-    assert data["status"] == "synced"
+    assert data["status"] == "succeeded"
+    assert "sync_run_id" in data
+    assert UUID(data["sync_run_id"])  # valid UUID
     assert data["connector_id"] == "fake"
     assert data["documents_created"] == 1
     assert data["versions_created"] == 1
