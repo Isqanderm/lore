@@ -42,6 +42,7 @@ class ImportResponse(BaseModel):
     repository_id: UUID
     connector_id: str
     status: str
+    sync_run_id: UUID
     raw_objects_processed: int
     documents_created: int
     versions_created: int
@@ -82,12 +83,13 @@ def _build_import_service(
 ) -> RepositoryImportService:
     ext_conn_repo = ExternalConnectionRepository(session)
     ext_repo_repo = ExternalRepositoryRepository(session)
-    ext_obj_repo = ExternalObjectRepository(session)
-    source_repo = SourceRepository(session)
-    doc_repo = DocumentRepository(session)
-    dv_repo = DocumentVersionRepository(session)
-    ingestion = IngestionService(ext_obj_repo, source_repo, doc_repo, dv_repo)
-    return RepositoryImportService(registry, ingestion, ext_conn_repo, ext_repo_repo)
+    sync_service = _build_sync_service(session, registry)
+    return RepositoryImportService(
+        registry=registry,
+        ext_connection_repo=ext_conn_repo,
+        ext_repository_repo=ext_repo_repo,
+        sync_service=sync_service,
+    )
 
 
 def _build_sync_service(
@@ -120,6 +122,12 @@ async def import_repository(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        # If sync run was created before failure, mark_failed() was flushed —
+        # commit persists the failed run. May also commit connection/repo if
+        # created before sync started; this is acceptable diagnostic state.
+        await session.commit()
+        raise HTTPException(status_code=500, detail="Import sync failed") from exc
 
     await session.commit()
 
@@ -127,6 +135,7 @@ async def import_repository(
         repository_id=result.repository_id,
         connector_id=result.connector_id,
         status=result.status,
+        sync_run_id=result.sync_run_id,
         raw_objects_processed=result.report.raw_objects_processed,
         documents_created=result.report.documents_created,
         versions_created=result.report.versions_created,
