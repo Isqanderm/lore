@@ -5,7 +5,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from uuid import UUID
 
-from sqlalchemy import func, select, update
+    from sqlalchemy.engine import CursorResult
+
+from sqlalchemy import func, or_, select, update
 
 from lore.infrastructure.db.models.document import DocumentORM, DocumentVersionORM
 from lore.infrastructure.db.models.external_object import ExternalObjectORM
@@ -119,6 +121,38 @@ class DocumentRepository(BaseRepository[DocumentORM]):
             .execution_options(synchronize_session=False)
         )
         await self.session.execute(stmt)
+
+    async def mark_missing_github_files_inactive(
+        self,
+        repository_id: UUID,
+        sync_run_id: UUID,
+    ) -> int:
+        subq = (
+            select(DocumentORM.id)
+            .join(SourceORM, DocumentORM.source_id == SourceORM.id)
+            .join(ExternalObjectORM, SourceORM.external_object_id == ExternalObjectORM.id)
+            .where(
+                ExternalObjectORM.repository_id == repository_id,
+                ExternalObjectORM.object_type == _GITHUB_FILE_OBJECT_TYPE,
+                DocumentORM.is_active.is_(True),
+                or_(
+                    DocumentORM.last_seen_sync_run_id.is_(None),
+                    DocumentORM.last_seen_sync_run_id != sync_run_id,
+                ),
+            )
+        )
+        stmt = (
+            update(DocumentORM)
+            .where(DocumentORM.id.in_(subq))
+            .values(
+                is_active=False,
+                deleted_at=func.now(),
+                updated_at=func.now(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        cursor: CursorResult[tuple[()]] = await self.session.execute(stmt)  # type: ignore[assignment]
+        return cursor.rowcount or 0
 
     async def get_by_source_kind_path(
         self,

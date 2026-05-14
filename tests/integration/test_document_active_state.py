@@ -251,3 +251,61 @@ async def test_e_mark_seen_in_sync_preserves_first_seen(db_session: AsyncSession
     await db_session.refresh(doc)
     assert doc.first_seen_sync_run_id == old_run.id  # unchanged
     assert doc.last_seen_sync_run_id == new_run.id  # updated
+
+
+# ── F: NULL last_seen is treated as "not seen in current sync" ────────────────
+
+
+async def test_f_mark_missing_handles_null_last_seen(db_session: AsyncSession) -> None:
+    repo = await _seed_conn_and_repo(db_session)
+    current_run = await _seed_sync_run(db_session, repo)
+    eo = await _seed_ext_object(db_session, repo, "github.file", "file:stale.py")
+    src = await _seed_source(db_session, eo)
+    doc = await _seed_document(
+        db_session,
+        src,
+        "stale.py",
+        is_active=True,
+        last_seen_sync_run_id=None,  # pre-tracking document
+    )
+
+    count = await DocumentRepository(db_session).mark_missing_github_files_inactive(
+        repository_id=repo.id, sync_run_id=current_run.id
+    )
+    await db_session.flush()
+
+    await db_session.refresh(doc)
+    assert count >= 1
+    assert doc.is_active is False
+    assert doc.deleted_at is not None
+
+
+# ── F2: already inactive doc is NOT re-stamped with new deleted_at ────────────
+
+
+async def test_f2_already_inactive_doc_not_updated(db_session: AsyncSession) -> None:
+    repo = await _seed_conn_and_repo(db_session)
+    current_run = await _seed_sync_run(db_session, repo)
+    eo = await _seed_ext_object(db_session, repo, "github.file", "file:already_gone.py")
+    src = await _seed_source(db_session, eo)
+    original_deleted_at = datetime(2024, 1, 1, tzinfo=UTC)
+    doc = await _seed_document(
+        db_session,
+        src,
+        "already_gone.py",
+        is_active=False,
+        deleted_at=original_deleted_at,
+        last_seen_sync_run_id=None,
+    )
+
+    await DocumentRepository(db_session).mark_missing_github_files_inactive(
+        repository_id=repo.id, sync_run_id=current_run.id
+    )
+    await db_session.flush()
+
+    await db_session.refresh(doc)
+    # deleted_at must remain the original timestamp — not overwritten
+    assert doc.deleted_at is not None
+    # SQLAlchemy may return timezone-aware vs naive; compare just the date part
+    assert doc.deleted_at.date() == original_deleted_at.date()
+    assert doc.is_active is False
