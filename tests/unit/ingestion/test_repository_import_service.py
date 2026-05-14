@@ -142,9 +142,9 @@ def _make_svc(fake_sync: FakeRepositorySyncService) -> RepositoryImportService:
     registry.register(_OkConnector())
     return RepositoryImportService(
         registry=registry,
-        ext_connection_repo=_FakeExtConnectionRepo(),
-        ext_repository_repo=_FakeExtRepositoryRepo(),
-        sync_service=fake_sync,
+        ext_connection_repo=_FakeExtConnectionRepo(),  # type: ignore[arg-type]
+        ext_repository_repo=_FakeExtRepositoryRepo(),  # type: ignore[arg-type]
+        sync_service=fake_sync,  # type: ignore[arg-type]
     )
 
 
@@ -197,15 +197,18 @@ async def test_import_does_not_call_full_sync_directly() -> None:
 
     await svc.import_repository("https://github.com/acme/myrepo", "github")
 
+    # Service did call sync_service — proves it did useful work, not just a no-op pass.
+    assert len(fake_sync.calls) == 1
+
 
 async def test_import_connector_not_found_propagates() -> None:
     registry = ConnectorRegistry()  # empty — no connectors registered
     fake_sync = FakeRepositorySyncService(_make_sync_result())
     svc = RepositoryImportService(
         registry=registry,
-        ext_connection_repo=_FakeExtConnectionRepo(),
-        ext_repository_repo=_FakeExtRepositoryRepo(),
-        sync_service=fake_sync,
+        ext_connection_repo=_FakeExtConnectionRepo(),  # type: ignore[arg-type]
+        ext_repository_repo=_FakeExtRepositoryRepo(),  # type: ignore[arg-type]
+        sync_service=fake_sync,  # type: ignore[arg-type]
     )
 
     with pytest.raises(ConnectorNotFoundError):
