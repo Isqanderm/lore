@@ -100,6 +100,7 @@ RepositoryStructureContent         # all sections + schema_version=1, generated_
 | `classify_roots(paths)` | Classify top-level dirs into source/test/docs/config |
 
 **Entrypoint specificity rule:** `apps/api/main.py` → `fastapi.app_candidate`, NOT `python.main`.
+Apply specific path-based rules before generic basename rules — check full path patterns first, then fall through to basename patterns.
 
 **Path handling invariants:** deduplicate, ignore empty, sort all output lists, do not mutate input.
 
@@ -164,6 +165,8 @@ def upgrade() -> None:
     )
 
 def downgrade() -> None:
+    # Delete repository_structure rows first — otherwise restoring the old constraint will fail
+    # because existing rows with artifact_type='repository_structure' violate the narrower constraint.
     op.execute("DELETE FROM repository_artifacts WHERE artifact_type = 'repository_structure'")
     op.drop_constraint("ck_repository_artifact_type", "repository_artifacts", type_="check")
     op.create_check_constraint(
@@ -187,14 +190,14 @@ Do not modify `apps/api/main.py` — `repository_artifacts_router` is already re
 ```python
 class RepositoryStructureMissingResponse(BaseModel):
     repository_id: UUID
-    artifact_type: str = ARTIFACT_TYPE_REPOSITORY_STRUCTURE
+    artifact_type: Literal["repository_structure"] = ARTIFACT_TYPE_REPOSITORY_STRUCTURE
     exists: bool = False
     state: Literal["missing"] = "missing"
     reason: str = "structure_not_generated"
 
 class RepositoryStructurePresentResponse(BaseModel):
     repository_id: UUID
-    artifact_type: str = ARTIFACT_TYPE_REPOSITORY_STRUCTURE
+    artifact_type: Literal["repository_structure"] = ARTIFACT_TYPE_REPOSITORY_STRUCTURE
     exists: bool = True
     state: Literal["fresh", "stale"]
     is_stale: bool
@@ -208,7 +211,7 @@ class RepositoryStructurePresentResponse(BaseModel):
 - `GET /repositories/{repository_id}/structure`
 - `POST /repositories/{repository_id}/structure/generate` (commits session after generation)
 
-**Error handling:** `RepositoryNotFoundError` and `RepositoryNotSyncedError` are already handled globally in `main.py`. No additional error handling needed.
+**Error handling:** Mirror existing Repository Brief endpoint behavior for `RepositoryNotFoundError` and `RepositoryNotSyncedError`. Do not introduce broad error-handling refactors in this PR — if brief endpoints already rely on global handlers, structure endpoints should do the same.
 
 ---
 
@@ -263,8 +266,8 @@ Required tests:
 - **B.** `test_generate_structure_after_import` — 200, exists=true, state="fresh", structure.stats.total_active_files > 0
 - **C.** `test_get_structure_fresh_after_generation` — exists=true, state="fresh", is_stale=false
 - **D.** `test_structure_becomes_stale_after_new_successful_sync` — state="stale", current_sync_run_id != source_sync_run_id
-- **E.** `test_structure_uses_only_active_documents` — regenerate after sync removes a file; deleted file absent from structure
-- **F.** `test_generate_structure_without_succeeded_sync_returns_error` — consistent with Brief behavior (global handlers already cover this)
+- **E.** `test_structure_uses_only_active_documents` — Use `apps/api/main.py` as the file that gets removed in sync_2. sync_1: `README.md` + `apps/api/main.py`; generate structure → `entrypoint_candidates` contains `apps/api/main.py`. sync_2: `README.md` only; generate structure again → `apps/api/main.py` absent from `entrypoint_candidates`, `source_roots` may shrink. This proves inactive files are excluded from structural classification, not just the file count.
+- **F.** `test_generate_structure_without_succeeded_sync_returns_error` — mirror behavior of the equivalent brief endpoint
 
 ---
 
@@ -284,6 +287,43 @@ Required tests:
 | `tests/integration/test_repository_structure_api.py` | **New** |
 
 `apps/api/main.py` — **do not modify**.
+
+---
+
+## Additional Implementation Clarifications
+
+### detect_infrastructure: CI file detection
+
+Do NOT use basename matching for `.circleci/config.yml`. Use path prefix matching:
+
+```
+ci_files:
+- paths under ".github/workflows/" ending .yml or .yaml
+- path == ".gitlab-ci.yml"
+- paths under ".circleci/"
+```
+
+`basename(".circleci/config.yml")` returns `config.yml`, not `.circleci/config.yml` — basename matching here would be wrong.
+
+### detect_entrypoint_candidates: rule priority
+
+Always apply specific path-based rules before generic basename rules:
+1. Check full path patterns first (`apps/api/main.py`, path ending `/api/main.py`, `cmd/<name>/main.go`, etc.)
+2. Fall through to basename patterns only if no specific rule matched
+
+This ensures `apps/api/main.py` resolves to `fastapi.app_candidate`, not `python.main`.
+
+### Empty repository (zero active paths)
+
+A repository with a succeeded sync and zero active paths is valid. `generate_structure` must succeed and return a fresh artifact with `total_active_files=0`. `RepositoryNotSyncedError` is raised only when there is no latest succeeded sync run, not when the active path list is empty.
+
+### Active-only test (test E)
+
+Use `apps/api/main.py` as the file that gets removed between syncs. Verify its absence from `entrypoint_candidates` (not just total count), proving structural classification — not just file counting — respects the active-only constraint.
+
+### Error handling scope
+
+Mirror existing Repository Brief endpoint behavior for `RepositoryNotFoundError` and `RepositoryNotSyncedError`. Do not refactor global error handling in this PR. If tests show that the existing brief endpoints work correctly due to global handlers, structure endpoints should rely on the same mechanism.
 
 ---
 
