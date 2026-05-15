@@ -1,0 +1,157 @@
+{
+  "name": "lore-retrieval-smoke-v1",
+  "repository": {
+    "provider": "github",
+    "full_name": "Isqanderm/lore"
+  },
+  "cases": [
+    {
+      "id": "sync-lifecycle",
+      "query": "How does repository sync lifecycle work?",
+      "expected_paths": [
+        "lore/sync/service.py",
+        "apps/api/routes/v1/repositories.py"
+      ],
+      "required_terms_any": [
+        "sync_repository",
+        "RepositorySyncService",
+        "trigger"
+      ]
+    },
+    {
+      "id": "active-documents",
+      "query": "Where are inactive or deleted repository files filtered out?",
+      "expected_paths": [
+        "lore/infrastructure/db/repositories/document.py"
+      ],
+      "required_terms_any": [
+        "is_active",
+        "deleted_at",
+        "mark_missing_github_files_inactive"
+      ]
+    },
+    {
+      "id": "latest-document-version",
+      "query": "How is the latest version of a document determined?",
+      "expected_paths": [
+        "lore/infrastructure/db/repositories/document.py"
+      ],
+      "required_terms_any": [
+        "is_latest",
+        "document_version",
+        "latest"
+      ]
+    },
+    {
+      "id": "repository-brief-generation",
+      "query": "How is the repository brief generated?",
+      "expected_paths": [
+        "lore/artifacts/repository_brief_service.py",
+        "apps/api/routes/v1/repository_artifacts.py"
+      ],
+      "required_terms_any": [
+        "generate_brief",
+        "RepositoryBriefService",
+        "brief"
+      ]
+    },
+    {
+      "id": "repository-structure-generation",
+      "query": "How is the repository file structure generated?",
+      "expected_paths": [
+        "lore/artifacts/repository_structure_service.py",
+        "apps/api/routes/v1/repository_artifacts.py"
+      ],
+      "required_terms_any": [
+        "generate_structure",
+        "RepositoryStructureService",
+        "structure"
+      ]
+    },
+    {
+      "id": "search-endpoint",
+      "query": "How does the repository search endpoint call retrieval and return ranked results?",
+      "expected_paths": [
+        "apps/api/routes/v1/repositories.py",
+        "lore/retrieval/service.py"
+      ],
+      "required_terms_any": [
+        "search_repository",
+        "RetrievalService",
+        "snippet"
+      ]
+    },
+    {
+      "id": "context-assembly",
+      "query": "How does the context endpoint assemble document excerpts within a character budget?",
+      "expected_paths": [
+        "lore/retrieval/service.py",
+        "apps/api/routes/v1/repositories.py"
+      ],
+      "required_terms_any": [
+        "build_repository_context",
+        "excerpt_chars",
+        "max_chars"
+      ]
+    },
+    {
+      "id": "document-repository-methods",
+      "query": "What database methods does the document repository expose for querying documents?",
+      "expected_paths": [
+        "lore/infrastructure/db/repositories/document.py"
+      ],
+      "required_terms_any": [
+        "DocumentRepository",
+        "get_by_id",
+        "find"
+      ]
+    },
+    {
+      "id": "ingestion-document-version-chunk",
+      "query": "How are document versions and content chunks created during repository ingestion?",
+      "expected_paths": [
+        "lore/ingestion/service.py",
+        "lore/infrastructure/db/repositories/chunk.py"
+      ],
+      "required_terms_any": [
+        "DocumentVersion",
+        "chunk",
+        "ingest"
+      ]
+    },
+    {
+      "id": "api-routes-repository",
+      "query": "What API routes are available for repository management and retrieval?",
+      "expected_paths": [
+        "apps/api/routes/v1/repositories.py"
+      ],
+      "required_terms_any": [
+        "router",
+        "repository_id"
+      ]
+    },
+    {
+      "id": "chunk-storage",
+      "query": "Where are document chunks persisted?",
+      "expected_paths": [
+        "lore/infrastructure/db/repositories/chunk.py"
+      ],
+      "required_terms_any": [
+        "ChunkRepository",
+        "chunk"
+      ]
+    },
+    {
+      "id": "repository-import",
+      "query": "How does the initial repository import work?",
+      "expected_paths": [
+        "lore/ingestion/repository_import.py",
+        "apps/api/routes/v1/repositories.py"
+      ],
+      "required_terms_any": [
+        "import_repository",
+        "RepositoryImport"
+      ]
+    }
+  ]
+}
