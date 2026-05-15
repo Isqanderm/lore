@@ -102,7 +102,9 @@ Expected: `ImportError` — `ContextExcerpt` and `extract_context_excerpt` not y
 
 - [ ] **Step 3: Add constant, dataclasses, and pure function to `lore/retrieval/service.py`**
 
-Open `lore/retrieval/service.py`. After the `RepositorySearchResultSet` dataclass (line ~25) and before `tokenize_query`, insert:
+Open `lore/retrieval/service.py`. The file already has `from __future__ import annotations` at the top — do not remove it. It is required for `_ScoredDocumentVersion` (added in Task 2) to use `Document` and `DocumentVersion` as annotations without a circular import.
+
+After the `RepositorySearchResultSet` dataclass (line ~25) and before `tokenize_query`, insert:
 
 ```python
 MIN_REMAINING_EXCERPT_CHARS = 300
@@ -218,7 +220,7 @@ class _ScoredDocumentVersion:
     score: float
 ```
 
-Then replace the entire `RetrievalService` class with:
+Replace **only** the class body starting from `class RetrievalService:` to the end of that class. Do **not** remove module-level dataclasses or functions added in Task 1 (`ContextExcerpt`, `ContextSourceItem`, `RepositoryContextPackage`, `MIN_REMAINING_EXCERPT_CHARS`, `extract_context_excerpt`).
 
 ```python
 class RetrievalService:
@@ -964,7 +966,7 @@ async def test_context_returns_200_with_empty_sources_when_no_match(
 pytest tests/e2e/test_repository_context_api.py -v
 ```
 
-Expected: `test_context_returns_404_for_unknown_repository` may pass accidentally (no route = 404), but `test_context_happy_path` and most others will fail (404/405 from missing endpoint, or 422 from missing route).
+Expected: route-related tests fail with 404/405 before the endpoint is registered. Validation tests (422 cases) will only start returning 422 after the endpoint and Pydantic schemas are wired up — before that they'll also return 404/405.
 
 - [ ] **Step 3: Update imports in `apps/api/routes/v1/repositories.py`**
 
