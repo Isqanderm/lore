@@ -209,7 +209,7 @@ class RetrievalService:
 4. Discard results where `score <= 0`.
 5. Sort by `score DESC`, then `path ASC` as deterministic tie-break.
 6. Apply `limit`.
-7. Extract snippet per result with `extract_snippet(version.content, terms)`.
+7. Extract snippet per result with `extract_snippet(version.content, terms)`. Use the actual content field name from `DocumentVersion` domain model — if the field is not called `content`, use the real field name from the codebase.
 8. Return `RepositorySearchResultSet`.
 
 ---
@@ -267,7 +267,7 @@ stmt = (
 )
 ```
 
-Use the existing module-level constant `_GITHUB_FILE_OBJECT_TYPE = "github.file"` already defined in `document.py` — do not hardcode the string again.
+Use the existing module-level constant `_GITHUB_FILE_OBJECT_TYPE = "github.file"` already defined in `document.py` — do not hardcode the string again. If the existing method `get_active_document_paths_by_repository_id()` applies the GitHub file object type filter differently, reuse that exact pattern. The goal is compatibility with current active document path logic, not just the constant itself.
 
 Key points:
 - INNER JOIN on versions: active documents without any `DocumentVersion` are silently skipped (nothing to search). This is not an error.
@@ -344,7 +344,9 @@ def extract_snippet(
         idx = content_lower.find(term)
         if idx != -1:
             start = max(0, idx - half)
-            end = min(len(content), idx + half)
+            end = min(len(content), start + length)
+            # If we hit the end, shift start back to preserve target length.
+            start = max(0, end - length)
             snippet = content[start:end]
             prefix = "..." if start > 0 else ""
             suffix = "..." if end < len(content) else ""
@@ -464,6 +466,20 @@ Add: `_seed_document_version(session, document_orm, version_number, content)`.
 - No `current_version_id` field on `DocumentORM`
 - No new DB migrations
 - No permissions/ACL
+
+---
+
+## Pre-Implementation Checklist
+
+Before writing any code, inspect:
+
+- `DocumentORM` and `DocumentVersionORM` field names — verify `content` field name; use the actual codebase name, not this spec's assumption;
+- `DocumentVersion` domain model field names (in `lore/schema/document.py`);
+- `get_active_document_paths_by_repository_id()` implementation — reuse its join/filter pattern exactly;
+- Existing route handler patterns in `repositories.py` for session management and 404 handling;
+- Existing test seed helpers in `test_document_active_state.py` and `test_repository_brief_active_documents.py`.
+
+Reuse existing constants and conventions. If a field name, object type literal, or join pattern in this spec differs from the actual codebase, use the actual codebase version.
 
 ---
 
