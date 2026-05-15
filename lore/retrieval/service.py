@@ -25,6 +25,40 @@ class RepositorySearchResultSet:
     results: list[RetrievalHit]
 
 
+MIN_REMAINING_EXCERPT_CHARS = 300
+
+
+@dataclass(frozen=True)
+class ContextExcerpt:
+    """Excerpt with character offsets into original content.
+
+    Invariant: content[start:end] == text
+    """
+
+    text: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class ContextSourceItem:
+    path: str
+    document_id: UUID
+    version_id: UUID
+    score: float
+    excerpt: str
+    excerpt_start: int
+    excerpt_end: int
+
+
+@dataclass(frozen=True)
+class RepositoryContextPackage:
+    query: str
+    max_chars: int
+    used_chars: int
+    sources: list[ContextSourceItem]
+
+
 def tokenize_query(query: str) -> list[str]:
     return [token.lower() for token in re.split(r"\W+", query) if len(token) >= 2]
 
@@ -73,6 +107,36 @@ def extract_snippet(
     snippet = content[:length]
     suffix = "..." if len(content) > length else ""
     return snippet + suffix
+
+
+def extract_context_excerpt(
+    content: str | None,
+    terms: list[str],
+    max_chars: int,
+) -> ContextExcerpt:
+    if max_chars <= 0 or not content:
+        return ContextExcerpt(text="", start=0, end=0)
+
+    content_lower = content.lower()
+    match_indexes: list[int] = []
+    for term in terms:
+        if not term:
+            continue
+        idx = content_lower.find(term)
+        if idx != -1:
+            match_indexes.append(idx)
+
+    if match_indexes:
+        idx = min(match_indexes)
+        half = max_chars // 2
+        start = max(0, idx - half)
+        end = min(len(content), start + max_chars)
+        start = max(0, end - max_chars)
+    else:
+        start = 0
+        end = min(len(content), max_chars)
+
+    return ContextExcerpt(text=content[start:end], start=start, end=end)
 
 
 class RetrievalService:
