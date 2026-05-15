@@ -259,9 +259,7 @@ def _is_case_failed(result: CaseResult) -> bool:
         return True
     if not result.context_path_hit:
         return True
-    if result.context_required_terms_applicable and not result.context_required_terms_hit:
-        return True
-    return False
+    return bool(result.context_required_terms_applicable and not result.context_required_terms_hit)
 
 
 def _format_pct(numerator: int, denominator: int) -> str:
