@@ -113,7 +113,7 @@ class ContextExcerpt:
 
 
 @dataclass(frozen=True)
-class RepositoryContextSource:
+class ContextSourceItem:
     path: str
     document_id: UUID
     version_id: UUID
@@ -128,8 +128,10 @@ class RepositoryContextPackage:
     query: str
     max_chars: int
     used_chars: int
-    sources: list[RepositoryContextSource]
+    sources: list[ContextSourceItem]
 ```
+
+Note: The service dataclass is named `ContextSourceItem` (not `RepositoryContextSource`) to avoid confusion with the Pydantic response model of the same name defined inline in the router. Pattern mirrors PR #9: service uses `RetrievalHit`, router uses `RepositorySearchResult`.
 
 #### New pure function `extract_context_excerpt()`
 
@@ -159,13 +161,13 @@ def extract_context_excerpt(
         return ContextExcerpt(text="", start=0, end=0)
 
     content_lower = content.lower()
-    match_indexes = [
-        idx
-        for term in terms
-        if term
-        for idx in [content_lower.find(term)]
-        if idx != -1
-    ]
+    match_indexes: list[int] = []
+    for term in terms:
+        if not term:
+            continue
+        idx = content_lower.find(term)
+        if idx != -1:
+            match_indexes.append(idx)
 
     if match_indexes:
         idx = min(match_indexes)
@@ -242,7 +244,7 @@ class RetrievalService:
         ranked = await self._rank_repository_document_versions(repository_id, query, limit)
         terms = tokenize_query(query)
         used = 0
-        sources: list[RepositoryContextSource] = []
+        sources: list[ContextSourceItem] = []
 
         for item in ranked:
             remaining = max_chars - used
@@ -252,7 +254,7 @@ class RetrievalService:
             excerpt = extract_context_excerpt(item.version.content, terms, per_source)
             if not excerpt.text:
                 continue
-            sources.append(RepositoryContextSource(
+            sources.append(ContextSourceItem(
                 path=item.document.path,
                 document_id=item.document.id,
                 version_id=item.version.id,
@@ -324,7 +326,7 @@ class RepositoryContextResponse(BaseModel):
     sources: list[RepositoryContextSource]
 ```
 
-Note: `RepositoryContextSource` is a Pydantic response schema defined inline in the router. The service layer also has a `RepositoryContextSource` dataclass in `lore/retrieval/service.py` — same name, different module. There is no import collision because the router does **not** import `RepositoryContextSource` from `lore.retrieval.service` by name. It only imports `RetrievalService`. The service dataclass is accessed solely as an attribute of the `RepositoryContextPackage` return value (`result.sources[i].path`, etc.) — never via a direct import into the router namespace.
+Note: `RepositoryContextSource` is a Pydantic response schema defined inline in the router. The service-layer equivalent is `ContextSourceItem` (a frozen dataclass in `lore/retrieval/service.py`) — deliberately different names to avoid confusion, following the PR #9 pattern (`RetrievalHit` in service, `RepositorySearchResult` in router). The router does **not** import `ContextSourceItem` by name; it accesses service output via attributes on `result.sources[i]` and maps them to the Pydantic model.
 
 #### New endpoint
 
