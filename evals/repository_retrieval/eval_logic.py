@@ -115,6 +115,8 @@ def extract_search_paths(response: dict[str, Any]) -> list[str]:
         raise ValueError("Search response must contain a 'results' list")
     paths: list[str] = []
     for index, item in enumerate(results):
+        if not isinstance(item, dict):
+            raise ValueError(f"Search result at index {index} must be an object")
         path = item.get("path")
         if not isinstance(path, str) or not path.strip():
             raise ValueError(f"Search result at index {index} must contain non-empty 'path'")
@@ -128,6 +130,8 @@ def extract_context_sources(response: dict[str, Any]) -> list[ContextSource]:
         raise ValueError("Context response must contain a 'sources' list")
     result: list[ContextSource] = []
     for index, item in enumerate(sources):
+        if not isinstance(item, dict):
+            raise ValueError(f"Context source at index {index} must be an object")
         path = item.get("path")
         if not isinstance(path, str) or not path.strip():
             raise ValueError(f"Context source at index {index} must contain non-empty 'path'")
@@ -160,7 +164,7 @@ def has_required_terms_hit(sources: list[ContextSource], required_terms_any: lis
     # Callers check is_required_terms_applicable to exclude from aggregate denominator.
     if not required_terms_any:
         return True
-    terms_lower = [t.lower() for t in required_terms_any]
+    terms_lower = [t.strip().lower() for t in required_terms_any]
     for source in sources:
         if source.excerpt:
             excerpt_lower = source.excerpt.lower()

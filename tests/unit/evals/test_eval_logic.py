@@ -188,6 +188,16 @@ def test_extract_context_sources_invalid_excerpt_type() -> None:
         extract_context_sources(response)
 
 
+def test_extract_search_paths_non_object_result() -> None:
+    with pytest.raises(ValueError, match="must be an object"):
+        extract_search_paths({"results": ["bad"]})
+
+
+def test_extract_context_sources_non_object_source() -> None:
+    with pytest.raises(ValueError, match="must be an object"):
+        extract_context_sources({"sources": ["bad"]})
+
+
 # ---------------------------------------------------------------------------
 # has_expected_path_in_top_k
 # ---------------------------------------------------------------------------
@@ -243,6 +253,11 @@ def test_required_terms_hit_empty_terms() -> None:
     # Empty required_terms_any → not applicable → treated as passed
     sources = [ContextSource(path="f.py", excerpt="anything")]
     assert has_required_terms_hit(sources, []) is True
+
+
+def test_required_terms_hit_strips_term_whitespace() -> None:
+    sources = [ContextSource(path="f.py", excerpt="calls sync_repository here")]
+    assert has_required_terms_hit(sources, [" sync_repository "]) is True
 
 
 # ---------------------------------------------------------------------------
