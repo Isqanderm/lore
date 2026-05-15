@@ -171,3 +171,76 @@ def has_required_terms_hit(sources: list[ContextSource], required_terms_any: lis
 
 def is_required_terms_applicable(required_terms_any: list[str]) -> bool:
     return bool(required_terms_any)
+
+
+# ---------------------------------------------------------------------------
+# Ratio helpers
+# ---------------------------------------------------------------------------
+
+
+def ratio(numerator: int, denominator: int) -> float:
+    return numerator / denominator if denominator > 0 else 0.0
+
+
+def search_top3_ratio(summary: EvalSummary) -> float:
+    return ratio(summary.search_top3_hits, summary.total_cases)
+
+
+def context_path_ratio(summary: EvalSummary) -> float:
+    return ratio(summary.context_path_hits, summary.total_cases)
+
+
+def context_terms_ratio(summary: EvalSummary) -> float | None:
+    if summary.context_required_terms_applicable == 0:
+        return None
+    return ratio(summary.context_required_terms_hits, summary.context_required_terms_applicable)
+
+
+# ---------------------------------------------------------------------------
+# Case evaluation and aggregation
+# ---------------------------------------------------------------------------
+
+
+def evaluate_case(
+    case: RepositoryEvalCase,
+    search_paths: list[str],
+    context_sources: list[ContextSource],
+) -> CaseResult:
+    applicable = is_required_terms_applicable(case.required_terms_any)
+    return CaseResult(
+        case_id=case.id,
+        query=case.query,
+        expected_paths=case.expected_paths,
+        required_terms_any=case.required_terms_any,
+        search_paths=search_paths,
+        context_sources=context_sources,
+        search_top1_path_hit=has_expected_path_in_top_k(search_paths, case.expected_paths, 1),
+        search_top3_path_hit=has_expected_path_in_top_k(search_paths, case.expected_paths, 3),
+        search_top5_path_hit=has_expected_path_in_top_k(search_paths, case.expected_paths, 5),
+        context_path_hit=has_context_path_hit(context_sources, case.expected_paths),
+        context_required_terms_hit=has_required_terms_hit(context_sources, case.required_terms_any),
+        context_required_terms_applicable=applicable,
+    )
+
+
+def summarize_results(results: list[CaseResult]) -> EvalSummary:
+    return EvalSummary(
+        total_cases=len(results),
+        search_top1_hits=sum(1 for r in results if r.search_top1_path_hit),
+        search_top3_hits=sum(1 for r in results if r.search_top3_path_hit),
+        search_top5_hits=sum(1 for r in results if r.search_top5_path_hit),
+        context_path_hits=sum(1 for r in results if r.context_path_hit),
+        context_required_terms_hits=sum(
+            1
+            for r in results
+            if r.context_required_terms_applicable and r.context_required_terms_hit
+        ),
+        context_required_terms_applicable=sum(
+            1 for r in results if r.context_required_terms_applicable
+        ),
+    )
+
+
+def thresholds_passed(summary: EvalSummary, min_top3: float, min_context_hit: float) -> bool:
+    # context_required_terms_hit is diagnostic in v1 — not a gate.
+    return search_top3_ratio(summary) >= min_top3 and context_path_ratio(summary) >= min_context_hit

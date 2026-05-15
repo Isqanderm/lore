@@ -8,8 +8,14 @@ import pytest
 from pydantic import ValidationError
 
 from evals.repository_retrieval.eval_logic import (
+    CaseResult,
     ContextSource,
+    EvalSummary,
+    RepositoryEvalCase,
     RepositoryEvalDataset,
+    context_path_ratio,
+    context_terms_ratio,
+    evaluate_case,
     extract_context_sources,
     extract_search_paths,
     has_context_path_hit,
@@ -17,6 +23,10 @@ from evals.repository_retrieval.eval_logic import (
     has_required_terms_hit,
     load_dataset,
     normalize_path,
+    ratio,
+    search_top3_ratio,
+    summarize_results,
+    thresholds_passed,
 )
 
 pytestmark = pytest.mark.unit
@@ -231,3 +241,207 @@ def test_required_terms_hit_empty_terms() -> None:
     # Empty required_terms_any → not applicable → treated as passed
     sources = [ContextSource(path="f.py", excerpt="anything")]
     assert has_required_terms_hit(sources, []) is True
+
+
+# ---------------------------------------------------------------------------
+# Ratio helpers
+# ---------------------------------------------------------------------------
+
+
+def test_ratio_zero_denominator() -> None:
+    assert ratio(1, 0) == 0.0
+
+
+def test_search_top3_ratio() -> None:
+    summary = EvalSummary(
+        total_cases=10,
+        search_top1_hits=5,
+        search_top3_hits=8,
+        search_top5_hits=9,
+        context_path_hits=7,
+        context_required_terms_hits=6,
+        context_required_terms_applicable=8,
+    )
+    assert search_top3_ratio(summary) == pytest.approx(0.8)
+
+
+def test_context_path_ratio() -> None:
+    summary = EvalSummary(
+        total_cases=10,
+        search_top1_hits=5,
+        search_top3_hits=8,
+        search_top5_hits=9,
+        context_path_hits=7,
+        context_required_terms_hits=6,
+        context_required_terms_applicable=8,
+    )
+    assert context_path_ratio(summary) == pytest.approx(0.7)
+
+
+def test_context_terms_ratio_none_when_no_applicable() -> None:
+    summary = EvalSummary(
+        total_cases=3,
+        search_top1_hits=1,
+        search_top3_hits=2,
+        search_top5_hits=3,
+        context_path_hits=2,
+        context_required_terms_hits=0,
+        context_required_terms_applicable=0,
+    )
+    assert context_terms_ratio(summary) is None
+
+
+# ---------------------------------------------------------------------------
+# evaluate_case — central glue function
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_case_sets_all_flags() -> None:
+    case = RepositoryEvalCase(
+        id="test",
+        query="test query",
+        expected_paths=["lore/sync/service.py"],
+        required_terms_any=["sync"],
+    )
+    search_paths = ["lore/sync/service.py", "other.py", "another.py"]
+    context_sources = [
+        ContextSource(path="lore/sync/service.py", excerpt="calls sync_repository here"),
+    ]
+    result = evaluate_case(case, search_paths, context_sources)
+    assert result.case_id == "test"
+    assert result.search_top1_path_hit is True
+    assert result.search_top3_path_hit is True
+    assert result.search_top5_path_hit is True
+    assert result.context_path_hit is True
+    assert result.context_required_terms_hit is True
+    assert result.context_required_terms_applicable is True
+
+
+def test_evaluate_case_miss() -> None:
+    case = RepositoryEvalCase(
+        id="miss",
+        query="query with no results",
+        expected_paths=["lore/missing.py"],
+        required_terms_any=["absent_term"],
+    )
+    result = evaluate_case(case, search_paths=[], context_sources=[])
+    assert result.search_top1_path_hit is False
+    assert result.search_top3_path_hit is False
+    assert result.context_path_hit is False
+    assert result.context_required_terms_hit is False
+    assert result.context_required_terms_applicable is True
+
+
+# ---------------------------------------------------------------------------
+# Aggregate metrics
+# ---------------------------------------------------------------------------
+
+
+def _make_result(
+    case_id: str,
+    *,
+    top1: bool = False,
+    top3: bool = False,
+    top5: bool = False,
+    ctx_path: bool = False,
+    terms_hit: bool = True,
+    terms_applicable: bool = False,
+) -> CaseResult:
+    return CaseResult(
+        case_id=case_id,
+        query="q",
+        expected_paths=["a.py"],
+        required_terms_any=[],
+        search_paths=[],
+        context_sources=[],
+        search_top1_path_hit=top1,
+        search_top3_path_hit=top3,
+        search_top5_path_hit=top5,
+        context_path_hit=ctx_path,
+        context_required_terms_hit=terms_hit,
+        context_required_terms_applicable=terms_applicable,
+    )
+
+
+def test_aggregate_metrics() -> None:
+    results = [
+        _make_result(
+            "c1",
+            top1=True,
+            top3=True,
+            top5=True,
+            ctx_path=True,
+            terms_hit=True,
+            terms_applicable=True,
+        ),
+        _make_result(
+            "c2",
+            top1=False,
+            top3=True,
+            top5=True,
+            ctx_path=True,
+            terms_hit=False,
+            terms_applicable=True,
+        ),
+        _make_result(
+            "c3",
+            top1=False,
+            top3=False,
+            top5=False,
+            ctx_path=False,
+            terms_hit=True,
+            terms_applicable=False,
+        ),
+    ]
+    summary = summarize_results(results)
+    assert summary.total_cases == 3
+    assert summary.search_top1_hits == 1
+    assert summary.search_top3_hits == 2
+    assert summary.search_top5_hits == 2
+    assert summary.context_path_hits == 2
+    assert summary.context_required_terms_hits == 1  # c1 only (c2 applicable but not hit)
+    assert summary.context_required_terms_applicable == 2  # c1 + c2
+
+
+# ---------------------------------------------------------------------------
+# Thresholds
+# ---------------------------------------------------------------------------
+
+
+def test_thresholds_pass() -> None:
+    summary = EvalSummary(
+        total_cases=10,
+        search_top1_hits=5,
+        search_top3_hits=8,  # 80% ≥ 70%
+        search_top5_hits=9,
+        context_path_hits=8,  # 80% ≥ 70%
+        context_required_terms_hits=6,
+        context_required_terms_applicable=8,
+    )
+    assert thresholds_passed(summary, min_top3=0.70, min_context_hit=0.70) is True
+
+
+def test_thresholds_fail_top3() -> None:
+    summary = EvalSummary(
+        total_cases=10,
+        search_top1_hits=3,
+        search_top3_hits=6,  # 60% < 70%
+        search_top5_hits=7,
+        context_path_hits=8,
+        context_required_terms_hits=6,
+        context_required_terms_applicable=8,
+    )
+    assert thresholds_passed(summary, min_top3=0.70, min_context_hit=0.70) is False
+
+
+def test_thresholds_fail_context() -> None:
+    summary = EvalSummary(
+        total_cases=10,
+        search_top1_hits=5,
+        search_top3_hits=8,
+        search_top5_hits=9,
+        context_path_hits=6,  # 60% < 70%
+        context_required_terms_hits=6,
+        context_required_terms_applicable=8,
+    )
+    assert thresholds_passed(summary, min_top3=0.70, min_context_hit=0.70) is False
