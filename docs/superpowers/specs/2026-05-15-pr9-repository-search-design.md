@@ -35,6 +35,7 @@ DocumentORM + DocumentVersionORM + SourceORM + ExternalObjectORM
 
 - `lore/retrieval/service.py` is the designated home for retrieval logic per CLAUDE.md architecture.
 - Router stays thin: validates request, checks repository exists, calls service, maps result to HTTP schema.
+- Service accepts only `DocumentRepository` — no knowledge of HTTP or repository existence. Repository existence check lives exclusively in the router.
 - Service returns domain dataclasses, not Pydantic schemas. This decouples retrieval logic from HTTP concerns.
 - Repository exposes a dumb IO primitive. No scoring or ranking inside it.
 - Scoring and snippet functions are pure Python — testable without DB.
@@ -52,7 +53,7 @@ DocumentORM.source_id
 This is the exact pattern used in the existing method:
 `DocumentRepository.get_active_document_paths_by_repository_id()`
 
-Any code that writes `DocumentORM.repository_id == repository_id` is wrong.
+**Any code that writes `DocumentORM.repository_id == repository_id` is wrong.**
 
 ---
 
@@ -62,8 +63,8 @@ Any code that writes `DocumentORM.repository_id == repository_id` is wrong.
 |---|---|
 | `tests/unit/retrieval/__init__.py` | Package marker |
 | `tests/unit/retrieval/test_search_scorer.py` | Unit tests for pure scoring/snippet functions |
-| `tests/integration/test_repository_search.py` | Integration tests A–E via RetrievalService + real DB |
-| `tests/e2e/test_repository_search_api.py` | E2E tests F–H + happy-path via HTTP |
+| `tests/integration/test_repository_search.py` | Integration tests via RetrievalService + real DB |
+| `tests/e2e/test_repository_search_api.py` | E2E tests via HTTP |
 
 ## Modified Files
 
@@ -109,12 +110,12 @@ POST /api/v1/repositories/{repository_id}/search
 
 ### Error cases
 
-| Condition | HTTP status | Error code |
-|---|---|---|
-| Repository not found | 404 | (HTTPException) |
-| Empty query (`""`) | 422 | Pydantic validation |
-| Query too long (>500 chars) | 422 | Pydantic validation |
-| Repository exists, no matches | 200 | — (empty `results`) |
+| Condition | HTTP status |
+|---|---|
+| Repository not found | 404 |
+| Empty or whitespace-only query | 422 |
+| Query too long (>500 chars) | 422 |
+| Repository exists, no matches | 200 (empty `results`) |
 
 **Important:** Repository non-existence must be detected explicitly via `ExternalRepositoryRepository.get_by_id()`, not inferred from an empty search result. These are semantically different states.
 
@@ -122,12 +123,24 @@ POST /api/v1/repositories/{repository_id}/search
 
 ## Pydantic Schemas (router layer)
 
-Defined in `apps/api/routes/v1/repositories.py`, following the existing pattern of inline schemas in routers:
+Defined in `apps/api/routes/v1/repositories.py`, following the existing pattern of inline schemas in routers.
+
+Project uses **Pydantic v2** — use `@field_validator` syntax.
 
 ```python
+from pydantic import BaseModel, Field, field_validator
+
 class RepositorySearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     limit: int = Field(default=10, ge=1, le=50)
+
+    @field_validator("query")
+    @classmethod
+    def query_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("query must not be blank")
+        return value
 
 class RepositorySearchResult(BaseModel):
     path: str
@@ -140,6 +153,8 @@ class RepositorySearchResponse(BaseModel):
     query: str
     results: list[RepositorySearchResult]
 ```
+
+The validator strips whitespace and rejects blank queries with 422. The stripped query is passed downstream.
 
 ---
 
@@ -166,16 +181,17 @@ class RepositorySearchResultSet:
 
 ## `RetrievalService` class
 
-Replace the placeholder `class RetrievalService: pass` in `lore/retrieval/service.py`:
+Replace the placeholder `class RetrievalService: pass` in `lore/retrieval/service.py`.
+
+`RetrievalService` accepts only `DocumentRepository`. It has no knowledge of `ExternalRepositoryRepository` — that check belongs exclusively in the router.
 
 ```python
 class RetrievalService:
     def __init__(
         self,
         document_repository: DocumentRepository,
-        external_repository_repository: ExternalRepositoryRepository,
     ) -> None:
-        ...
+        self._document_repository = document_repository
 
     async def search_repository(
         self,
@@ -187,16 +203,14 @@ class RetrievalService:
 ```
 
 **Service behaviour:**
-1. Fetch all active documents with their latest version via repository method.
-2. Tokenize query.
-3. Score each (document, version) pair using `score_document()`.
+1. Fetch all active documents with their latest version via `document_repository.get_active_documents_with_latest_versions_by_repository_id(repository_id)`.
+2. Tokenize query into terms with `tokenize_query(query)`.
+3. Score each `(document, version)` pair with `score_document(query, terms, document.path, version.content)`.
 4. Discard results where `score <= 0`.
 5. Sort by `score DESC`, then `path ASC` as deterministic tie-break.
-6. Apply limit.
-7. Extract snippet per result using `extract_snippet()`.
+6. Apply `limit`.
+7. Extract snippet per result with `extract_snippet(version.content, terms)`.
 8. Return `RepositorySearchResultSet`.
-
-**Repository existence check belongs in the router**, which calls `ExternalRepositoryRepository.get_by_id()` before calling the service — following the pattern already used in `get_repository()`, `list_sync_runs()`, etc.
 
 ---
 
@@ -208,38 +222,69 @@ async def get_active_documents_with_latest_versions_by_repository_id(
 ) -> list[tuple[Document, DocumentVersion]]:
 ```
 
-**Implementation:** One SQL query using a window function:
+**SQLAlchemy implementation approach** — one query, window function via subquery:
 
-```sql
-SELECT doc.*, dv.*
-FROM documents doc
-JOIN sources s ON doc.source_id = s.id
-JOIN external_objects eo ON s.external_object_id = eo.id
-JOIN (
-    SELECT *,
-           ROW_NUMBER() OVER (
-               PARTITION BY document_id
-               ORDER BY version DESC, created_at DESC, id DESC
-           ) AS rn
-    FROM document_versions
-) dv ON dv.document_id = doc.id AND dv.rn = 1
-WHERE eo.repository_id = :repository_id
-  AND eo.object_type = 'github.file'
-  AND doc.is_active = true
+```python
+from sqlalchemy import func, select
+from sqlalchemy import desc
+
+# Step 1: subquery that selects the version_id of the latest version per document
+latest_versions_subq = (
+    select(
+        DocumentVersionORM.id.label("version_id"),
+        DocumentVersionORM.document_id.label("document_id"),
+        func.row_number()
+        .over(
+            partition_by=DocumentVersionORM.document_id,
+            order_by=(
+                DocumentVersionORM.version.desc(),
+                DocumentVersionORM.created_at.desc(),
+                DocumentVersionORM.id.desc(),
+            ),
+        )
+        .label("rn"),
+    )
+    .subquery()
+)
+
+# Step 2: main query — join documents to latest version ORM rows
+stmt = (
+    select(DocumentORM, DocumentVersionORM)
+    .join(SourceORM, DocumentORM.source_id == SourceORM.id)
+    .join(ExternalObjectORM, SourceORM.external_object_id == ExternalObjectORM.id)
+    .join(
+        latest_versions_subq,
+        latest_versions_subq.c.document_id == DocumentORM.id,
+    )
+    .join(
+        DocumentVersionORM,
+        DocumentVersionORM.id == latest_versions_subq.c.version_id,
+    )
+    .where(latest_versions_subq.c.rn == 1)
+    .where(ExternalObjectORM.repository_id == repository_id)
+    .where(ExternalObjectORM.object_type == _GITHUB_FILE_OBJECT_TYPE)
+    .where(DocumentORM.is_active.is_(True))
+)
 ```
 
+Use the existing module-level constant `_GITHUB_FILE_OBJECT_TYPE = "github.file"` already defined in `document.py` — do not hardcode the string again.
+
 Key points:
-- INNER JOIN on versions: active documents without any document version are silently skipped (nothing to search).
-- `ORDER BY version DESC, created_at DESC, id DESC` provides a deterministic latest-version selection even if version values collide.
-- Filters both `is_active=True` and `object_type='github.file'`, consistent with existing methods.
+- INNER JOIN on versions: active documents without any `DocumentVersion` are silently skipped (nothing to search). This is not an error.
+- The two-step subquery approach (`version_id` selection → join back to `DocumentVersionORM`) allows SQLAlchemy to correctly map full ORM instances into `list[tuple[Document, DocumentVersion]]`.
+- `ORDER BY version DESC, created_at DESC, id DESC` is a deterministic tie-break even if version values collide.
 
 ---
 
 ## Pure Functions
 
-Module-level in `lore/retrieval/service.py`. Do not split into separate files in this PR.
+Module-level in `lore/retrieval/service.py`. **Do not create separate scoring/snippet modules in this PR.**
+
+`content` is typed as `str | None` in both functions because `DocumentVersion.content` may be null.
 
 ```python
+import re
+
 def tokenize_query(query: str) -> list[str]:
     """Split query into lowercase tokens, minimum 2 chars."""
     return [
@@ -248,13 +293,19 @@ def tokenize_query(query: str) -> list[str]:
         if len(token) >= 2
     ]
 
-def score_document(query: str, terms: list[str], path: str, content: str) -> float:
+
+def score_document(
+    query: str,
+    terms: list[str],
+    path: str,
+    content: str | None,
+) -> float:
     """
     Lexical scoring: term frequency in path/content + phrase bonuses.
     Returns 0.0–1.0. Returns 0.0 if no terms match.
     """
     path_lower = path.lower()
-    content_lower = content.lower()
+    content_lower = (content or "").lower()
     phrase = query.lower().strip()
 
     raw_score = 0.0
@@ -272,13 +323,37 @@ def score_document(query: str, terms: list[str], path: str, content: str) -> flo
 
     return min(raw_score / 20.0, 1.0)
 
-def extract_snippet(content: str, terms: list[str], length: int = 240) -> str:
+
+def extract_snippet(
+    content: str | None,
+    terms: list[str],
+    length: int = 240,
+) -> str:
     """
     Extract a ~length-char snippet from content around the first matched term.
     Adds '...' prefix/suffix when truncated.
     Returns beginning of content if no term found.
-    Returns '' if content is empty/None.
+    Returns '' if content is empty or None.
     """
+    if not content:
+        return ""
+    content_lower = content.lower()
+    half = length // 2
+
+    for term in terms:
+        idx = content_lower.find(term)
+        if idx != -1:
+            start = max(0, idx - half)
+            end = min(len(content), idx + half)
+            snippet = content[start:end]
+            prefix = "..." if start > 0 else ""
+            suffix = "..." if end < len(content) else ""
+            return prefix + snippet + suffix
+
+    # No term found — return beginning
+    snippet = content[:length]
+    suffix = "..." if len(content) > length else ""
+    return snippet + suffix
 ```
 
 ---
@@ -300,10 +375,7 @@ async def search_repository(
 
     # 2. Build service and search
     doc_repo = DocumentRepository(session)
-    svc = RetrievalService(
-        document_repository=doc_repo,
-        external_repository_repository=repo_repo,
-    )
+    svc = RetrievalService(document_repository=doc_repo)
     result = await svc.search_repository(repository_id, body.query, body.limit)
 
     # 3. Map domain → API schema
@@ -328,50 +400,55 @@ async def search_repository(
 
 ### Unit tests — `tests/unit/retrieval/test_search_scorer.py`
 
-`@pytest.mark.unit`
+`@pytest.mark.unit` — pure Python, no DB, no fixtures.
 
-| Test | What it checks |
+| Test name | What it checks |
 |---|---|
-| `test_tokenize_splits_on_non_word` | `"github sync"` → `["github", "sync"]` |
-| `test_tokenize_drops_short_tokens` | single-char tokens excluded |
-| `test_score_zero_when_no_match` | no terms in path or content → 0.0 |
-| `test_score_term_in_path` | term in path → score > 0 |
-| `test_score_term_in_content` | term in content → score > 0 |
-| `test_score_phrase_bonus_path` | phrase in path → higher than individual terms |
-| `test_score_phrase_bonus_content` | phrase in content → higher than term-only |
-| `test_score_clamped_to_one` | extreme content → score <= 1.0 |
-| `test_snippet_centers_on_match` | snippet window around first match |
-| `test_snippet_ellipsis_on_truncation` | `...` added when content truncated |
-| `test_snippet_beginning_when_no_match` | returns first N chars if no term found |
-| `test_snippet_empty_content` | returns `""` for empty/None content |
+| `test_tokenize_query_splits_on_non_word_chars` | `"github sync"` → `["github", "sync"]` |
+| `test_tokenize_query_drops_single_char_tokens` | `"a b go"` → `["go"]` |
+| `test_score_document_returns_zero_when_no_match` | unrelated path+content → `0.0` |
+| `test_score_document_term_in_path_gives_positive_score` | term in path → score > 0 |
+| `test_score_document_term_in_content_gives_positive_score` | term in content → score > 0 |
+| `test_score_document_phrase_in_path_scores_higher_than_terms_only` | full phrase match in path > individual terms |
+| `test_score_document_phrase_in_content_scores_higher_than_terms_only` | full phrase match in content > individual terms |
+| `test_score_document_clamped_to_one` | extreme repetition → score never exceeds `1.0` |
+| `test_score_document_none_content_treated_as_empty` | `content=None` → no crash, scores only path |
+| `test_extract_snippet_centers_on_first_match` | snippet window is around matched term |
+| `test_extract_snippet_adds_ellipsis_when_truncated` | `...` added on both sides when truncated |
+| `test_extract_snippet_returns_beginning_when_no_term_match` | first 240 chars when no term found |
+| `test_extract_snippet_returns_empty_for_none_content` | `content=None` → `""` |
+| `test_extract_snippet_returns_empty_for_empty_string` | `content=""` → `""` |
 
 ### Integration tests — `tests/integration/test_repository_search.py`
 
 `@pytest.mark.integration` — use `db_session` fixture, seed ORM objects directly, call `RetrievalService.search_repository()`.
 
-Seed helper shape follows existing `_seed_conn_and_repo()`, `_seed_ext_object()`, `_seed_source()`, `_seed_document()` patterns from `test_document_active_state.py`. Add `_seed_document_version(session, document, version, content)`.
+Seed helpers follow the pattern from `test_document_active_state.py`:  
+`_seed_conn_and_repo()`, `_seed_ext_object()`, `_seed_source()`, `_seed_document()`.  
+Add: `_seed_document_version(session, document_orm, version_number, content)`.
 
-| Test | Scenario |
+| Test name | Scenario |
 |---|---|
-| **A. Active only** | active doc matches + inactive doc has stronger match → only active returned |
-| **B1. Latest version only — old has match** | old version has query, latest does not → doc not returned |
-| **B2. Latest version only — latest has match** | old version no match, latest has query → doc returned with latest `version_id` |
-| **C. Repository isolation** | repo A and repo B both have matching docs → search in A returns only A's docs |
-| **D. Limit respected** | more matching docs than limit → exactly `limit` results returned |
-| **E. Ranking** | doc B has phrase in path, doc A has weak content match → doc B ranked first |
+| `test_search_repository_excludes_inactive_documents` | active doc matches + inactive doc has stronger match → only active returned |
+| `test_search_repository_skips_doc_when_only_old_version_matches` | old version has query, latest does not → doc not returned |
+| `test_search_repository_uses_latest_document_version` | old version no match, latest has query → doc returned with latest `version_id` |
+| `test_search_repository_scoped_to_target_repository` | repo A and repo B both match → search A returns only A's docs |
+| `test_search_repository_respects_limit` | more matching docs than limit → exactly `limit` results |
+| `test_search_repository_ranks_stronger_match_first` | doc B has phrase in path, doc A has weak content match → doc B ranked first |
 
 ### E2E tests — `tests/e2e/test_repository_search_api.py`
 
 `@pytest.mark.e2e` — use `app_client_with_db` + `db_session` fixtures.
 
-| Test | HTTP behaviour |
+| Test name | HTTP behaviour |
 |---|---|
-| **F. Empty query validation** | `POST` with `{"query": ""}` → 422 |
-| **G. No results** | repo exists, no matching active docs → 200, `results: []` |
-| **H. Repository not found** | unknown UUID → 404 |
-| **I. Happy path** | seed repo + active doc + version with query text → 200, correct JSON shape (query, path, document_id, version_id, snippet, score present) |
+| `test_search_repository_returns_422_for_empty_query` | `POST {"query": ""}` → 422 |
+| `test_search_repository_returns_422_for_whitespace_query` | `POST {"query": "   "}` → 422 |
+| `test_search_repository_returns_200_with_empty_results_when_no_match` | repo exists, no matching docs → 200, `results: []` |
+| `test_search_repository_returns_404_for_unknown_repository` | unknown UUID → 404 |
+| `test_search_repository_happy_path` | seed repo + active doc + version with query text → 200, full JSON shape validated |
 
-Test I verifies: endpoint is correctly mounted, UUID fields serialize as strings, response schema matches contract.
+`test_search_repository_happy_path` verifies: endpoint mounted correctly, UUID fields serialize as strings, all required fields present (`query`, `path`, `document_id`, `version_id`, `snippet`, `score`), `score` is a float.
 
 ---
 
@@ -383,8 +460,8 @@ Test I verifies: endpoint is correctly mounted, UUID fields serialize as strings
 - No cross-repository search
 - No Postgres full-text search
 - No separate `lore/search/` module
-- No search backend abstraction
-- No `current_version_id` field on DocumentORM
+- No search backend abstraction layer
+- No `current_version_id` field on `DocumentORM`
 - No new DB migrations
 - No permissions/ACL
 
@@ -393,14 +470,16 @@ Test I verifies: endpoint is correctly mounted, UUID fields serialize as strings
 ## Definition of Done
 
 - [ ] `POST /api/v1/repositories/{repository_id}/search` exists and is mounted
-- [ ] Request validates `query` (1–500 chars) and `limit` (1–50, default 10)
+- [ ] Request validates `query` (1–500 chars, non-blank after strip) and `limit` (1–50, default 10)
 - [ ] Response includes `query` + `results[]` with `path`, `document_id`, `version_id`, `snippet`, `score`
 - [ ] Only `is_active=True` documents are searched
 - [ ] Only the latest `DocumentVersion` (by `version DESC`) is searched per document
+- [ ] Active documents without any version are silently skipped
 - [ ] Scope is strictly per-repository (join through `ExternalObjectORM.repository_id`)
+- [ ] `_GITHUB_FILE_OBJECT_TYPE` constant reused — no literal `"github.file"` duplication
 - [ ] Results sorted by `score DESC`, tie-break `path ASC`
 - [ ] Limit applied after sorting
-- [ ] Empty query → 422
+- [ ] Empty or whitespace-only query → 422
 - [ ] Unknown repository → 404
 - [ ] Repository with no matches → 200 `{ results: [] }`
 - [ ] All unit, integration, and E2E tests pass
