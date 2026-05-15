@@ -492,7 +492,7 @@ Reuse existing constants and conventions. If a field name, object type literal, 
 - [ ] Only the latest `DocumentVersion` (by `version DESC`) is searched per document
 - [ ] Active documents without any version are silently skipped
 - [ ] Scope is strictly per-repository (join through `ExternalObjectORM.repository_id`)
-- [ ] `_GITHUB_FILE_OBJECT_TYPE` constant reused — no literal `"github.file"` duplication
+- [ ] Existing GitHub file object type filter is reused from document repository conventions — no new object type literal is introduced
 - [ ] Results sorted by `score DESC`, tie-break `path ASC`
 - [ ] Limit applied after sorting
 - [ ] Empty or whitespace-only query → 422
