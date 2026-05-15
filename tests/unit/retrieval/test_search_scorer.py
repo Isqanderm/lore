@@ -196,9 +196,9 @@ def test_score_document_caps_repeated_content_matches() -> None:
 
 
 def test_score_document_exact_phrase_in_path_contributes() -> None:
-    # First path: both terms in path and basename, plus literal phrase "repository_import".
-    # Second path: "repository" only in directory segment (not basename), "import" in basename.
-    # Phrase boost isolates the PATH_PHRASE_WEIGHT contribution.
+    # Both basenames contain "repository" and "import", so term/basename boosts are equal.
+    # Only the first path contains the literal phrase "repository_import" — this isolates
+    # the PATH_PHRASE_WEIGHT contribution.
     terms = ["repository", "import"]
 
     score_with_phrase = score_document(
@@ -211,7 +211,7 @@ def test_score_document_exact_phrase_in_path_contributes() -> None:
     score_without_phrase = score_document(
         query="repository_import",
         terms=terms,
-        path="lore/ingestion/repository/service_import.py",
+        path="lore/ingestion/import_repository.py",
         content="",
     )
 
