@@ -79,12 +79,13 @@ def test_score_document_term_in_content_gives_positive_score() -> None:
 
 
 def test_score_document_phrase_in_path_scores_higher_than_term_only() -> None:
-    # Same phrase, term scores only from content vs phrase bonus from path
+    # Use hyphen so the phrase is a literal substring of the path.
+    # Underscore is a word char — "sync_service" does NOT contain "sync service".
     phrase_score = score_document(
-        "sync service", ["sync", "service"], "lore/sync_service/main.py", ""
+        "sync-service", ["sync", "service"], "lore/sync-service/main.py", ""
     )
     content_only_score = score_document(
-        "sync service", ["sync", "service"], "no_match.py", "sync service here"
+        "sync-service", ["sync", "service"], "no_match.py", "sync and service here"
     )
     assert phrase_score > content_only_score
 
@@ -258,7 +259,7 @@ class RetrievalService:
 .venv/bin/pytest tests/unit/retrieval/ -v
 ```
 
-Expected output: 14 tests PASSED.
+Expected output: 16 tests PASSED.
 
 - [ ] **Step 6: Run lint and type check**
 
@@ -284,6 +285,8 @@ git commit -m "feat: add retrieval pure functions and domain types"
 - Modify: `lore/infrastructure/db/repositories/document.py`
 
 - [ ] **Step 1: Write integration test file with seed helpers and repository method tests**
+
+> **Before using the seed helpers below:** compare them with the existing helpers in `tests/integration/test_document_active_state.py`. The code below is a template. If `DocumentORM` has acquired required fields (e.g., `document_kind`, `logical_path`) in newer migrations, include those fields. Prefer reusing existing helpers if they are importable; otherwise copy and extend.
 
 Create `tests/integration/test_repository_search.py`:
 
