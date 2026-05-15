@@ -7,3 +7,6 @@ dist/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+
+# Superpowers planning artifacts — agent scratchpad, not product history
+docs/superpowers/
