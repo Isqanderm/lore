@@ -7,6 +7,7 @@ from uuid import UUID  # noqa: TC003, TCH003
 
 if TYPE_CHECKING:
     from lore.infrastructure.db.repositories.document import DocumentRepository
+    from lore.schema.document import Document, DocumentVersion
 
 
 @dataclass(frozen=True)
@@ -87,4 +88,31 @@ class RetrievalService:
         query: str,
         limit: int,
     ) -> RepositorySearchResultSet:
-        raise NotImplementedError
+        pairs: list[
+            tuple[Document, DocumentVersion]
+        ] = await self._document_repository.get_active_documents_with_latest_versions_by_repository_id(
+            repository_id
+        )
+        terms = tokenize_query(query)
+
+        scored: list[tuple[float, str, Document, DocumentVersion]] = []
+        for doc, version in pairs:
+            s = score_document(query, terms, doc.path, version.content)
+            if s > 0:
+                scored.append((s, doc.path, doc, version))
+
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        top = scored[:limit]
+
+        hits = [
+            RetrievalHit(
+                path=doc.path,
+                document_id=doc.id,
+                version_id=version.id,
+                snippet=extract_snippet(version.content, terms),
+                score=s,
+            )
+            for s, _, doc, version in top
+        ]
+
+        return RepositorySearchResultSet(query=query, results=hits)
