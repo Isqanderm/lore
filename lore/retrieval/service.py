@@ -139,6 +139,15 @@ def extract_context_excerpt(
     return ContextExcerpt(text=content[start:end], start=start, end=end)
 
 
+@dataclass(frozen=True)
+class _ScoredDocumentVersion:
+    """Internal implementation detail — not part of the public retrieval API."""
+
+    document: Document
+    version: DocumentVersion
+    score: float
+
+
 class RetrievalService:
     def __init__(
         self,
@@ -146,37 +155,42 @@ class RetrievalService:
     ) -> None:
         self._document_repository = document_repository
 
-    async def search_repository(
+    async def _rank_repository_document_versions(
         self,
         repository_id: UUID,
         query: str,
         limit: int,
-    ) -> RepositorySearchResultSet:
+    ) -> list[_ScoredDocumentVersion]:
         pairs: list[
             tuple[Document, DocumentVersion]
         ] = await self._document_repository.get_active_documents_with_latest_versions_by_repository_id(
             repository_id
         )
         terms = tokenize_query(query)
-
-        scored: list[tuple[float, str, Document, DocumentVersion]] = []
+        scored: list[_ScoredDocumentVersion] = []
         for doc, version in pairs:
             s = score_document(query, terms, doc.path, version.content)
             if s > 0:
-                scored.append((s, doc.path, doc, version))
+                scored.append(_ScoredDocumentVersion(document=doc, version=version, score=s))
+        scored.sort(key=lambda item: (-item.score, item.document.path))
+        return scored[:limit]
 
-        scored.sort(key=lambda x: (-x[0], x[1]))
-        top = scored[:limit]
-
+    async def search_repository(
+        self,
+        repository_id: UUID,
+        query: str,
+        limit: int,
+    ) -> RepositorySearchResultSet:
+        ranked = await self._rank_repository_document_versions(repository_id, query, limit)
+        terms = tokenize_query(query)
         hits = [
             RetrievalHit(
-                path=doc.path,
-                document_id=doc.id,
-                version_id=version.id,
-                snippet=extract_snippet(version.content, terms),
-                score=s,
+                path=item.document.path,
+                document_id=item.document.id,
+                version_id=item.version.id,
+                snippet=extract_snippet(item.version.content, terms),
+                score=item.score,
             )
-            for s, _, doc, version in top
+            for item in ranked
         ]
-
         return RepositorySearchResultSet(query=query, results=hits)
