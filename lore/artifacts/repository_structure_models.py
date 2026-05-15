@@ -271,12 +271,12 @@ def detect_infrastructure(paths: list[str]) -> RepositoryStructureInfrastructure
             docker_files.add(n)
 
         # CI files — path prefix matching (not basename); use set for dedup
-        if (
-            n.startswith(".github/workflows/")
-            and (n.endswith(".yml") or n.endswith(".yaml"))
-            or n == ".gitlab-ci.yml"
-            or n.startswith(".circleci/")
-        ):
+        is_github_workflow = n.startswith(".github/workflows/") and (
+            n.endswith(".yml") or n.endswith(".yaml")
+        )
+        is_gitlab_ci = n == ".gitlab-ci.yml"
+        is_circle_ci = n.startswith(".circleci/")
+        if is_github_workflow or is_gitlab_ci or is_circle_ci:
             ci_files.add(n)
 
         # Migration dirs — scan directory components (exclude the filename)
