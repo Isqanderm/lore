@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 from evals.repository_retrieval.eval_logic import (
     RepositoryEvalDataset,
@@ -31,9 +29,7 @@ _VALID_DATASET: dict[str, Any] = {
 
 
 def test_load_dataset_valid(tmp_path: Path) -> None:
-    from pathlib import Path as PathlibPath
-
-    f = PathlibPath(tmp_path) / "eval.json"
+    f = Path(tmp_path) / "eval.json"
     f.write_text(json.dumps(_VALID_DATASET), encoding="utf-8")
     dataset = load_dataset(f)
     assert dataset.name == "test-eval"
