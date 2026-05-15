@@ -9,7 +9,10 @@ from pydantic import ValidationError
 
 from evals.repository_retrieval.eval_logic import (
     RepositoryEvalDataset,
+    extract_context_sources,
+    extract_search_paths,
     load_dataset,
+    normalize_path,
 )
 
 pytestmark = pytest.mark.unit
@@ -82,3 +85,88 @@ def test_load_dataset_invalid_schema_raises_validation_error(tmp_path: Path) -> 
     f.write_text(json.dumps({**_VALID_DATASET, "cases": []}), encoding="utf-8")
     with pytest.raises(ValidationError):
         load_dataset(f)
+
+
+# ---------------------------------------------------------------------------
+# normalize_path
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_path_strips_leading_slash() -> None:
+    assert normalize_path("/foo/bar.py") == "foo/bar.py"
+
+
+def test_normalize_path_strips_whitespace() -> None:
+    assert normalize_path("  foo/bar.py  ") == "foo/bar.py"
+
+
+# ---------------------------------------------------------------------------
+# extract_search_paths
+# ---------------------------------------------------------------------------
+
+
+def test_extract_search_paths_real_schema() -> None:
+    response = {
+        "query": "test",
+        "results": [
+            {
+                "path": "foo/bar.py",
+                "snippet": "some text",
+                "score": 0.9,
+                "document_id": "00000000-0000-0000-0000-000000000001",
+                "version_id": "00000000-0000-0000-0000-000000000002",
+            }
+        ],
+    }
+    paths = extract_search_paths(response)
+    assert paths == ["foo/bar.py"]
+
+
+def test_extract_search_paths_missing_results() -> None:
+    with pytest.raises(ValueError, match="'results' list"):
+        extract_search_paths({})
+
+
+def test_extract_search_paths_missing_path() -> None:
+    response = {"results": [{"snippet": "...", "score": 0.9}]}
+    with pytest.raises(ValueError, match="index 0"):
+        extract_search_paths(response)
+
+
+# ---------------------------------------------------------------------------
+# extract_context_sources
+# ---------------------------------------------------------------------------
+
+
+def test_extract_context_sources_real_schema() -> None:
+    response = {
+        "query": "test",
+        "max_chars": 12000,
+        "used_chars": 100,
+        "sources": [
+            {
+                "path": "foo/bar.py",
+                "excerpt": "some text",
+                "score": 0.9,
+                "document_id": "00000000-0000-0000-0000-000000000001",
+                "version_id": "00000000-0000-0000-0000-000000000002",
+                "excerpt_start": 0,
+                "excerpt_end": 9,
+            }
+        ],
+    }
+    sources = extract_context_sources(response)
+    assert len(sources) == 1
+    assert sources[0].path == "foo/bar.py"
+    assert sources[0].excerpt == "some text"
+
+
+def test_extract_context_sources_missing_sources() -> None:
+    with pytest.raises(ValueError, match="'sources' list"):
+        extract_context_sources({})
+
+
+def test_extract_context_sources_invalid_excerpt_type() -> None:
+    response = {"sources": [{"path": "foo.py", "excerpt": 42}]}
+    with pytest.raises(ValueError, match="'excerpt' must be str or null"):
+        extract_context_sources(response)

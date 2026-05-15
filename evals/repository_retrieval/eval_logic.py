@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -92,3 +93,46 @@ def load_dataset(path: str | Path) -> RepositoryEvalDataset:
     except json.JSONDecodeError as exc:
         raise ValueError(f"Dataset file {path!r} is not valid JSON: {exc}") from exc
     return RepositoryEvalDataset.model_validate(data)
+
+
+# ---------------------------------------------------------------------------
+# Path normalization
+# ---------------------------------------------------------------------------
+
+
+def normalize_path(path: str) -> str:
+    return path.strip().lstrip("/")
+
+
+# ---------------------------------------------------------------------------
+# Response parsing — fail-fast on schema mismatch
+# ---------------------------------------------------------------------------
+
+
+def extract_search_paths(response: dict[str, Any]) -> list[str]:
+    results = response.get("results")
+    if not isinstance(results, list):
+        raise ValueError("Search response must contain a 'results' list")
+    paths: list[str] = []
+    for index, item in enumerate(results):
+        path = item.get("path")
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError(f"Search result at index {index} must contain non-empty 'path'")
+        paths.append(normalize_path(path))
+    return paths
+
+
+def extract_context_sources(response: dict[str, Any]) -> list[ContextSource]:
+    sources = response.get("sources")
+    if not isinstance(sources, list):
+        raise ValueError("Context response must contain a 'sources' list")
+    result: list[ContextSource] = []
+    for index, item in enumerate(sources):
+        path = item.get("path")
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError(f"Context source at index {index} must contain non-empty 'path'")
+        excerpt = item.get("excerpt")
+        if excerpt is not None and not isinstance(excerpt, str):
+            raise ValueError(f"Context source at index {index}: 'excerpt' must be str or null")
+        result.append(ContextSource(path=normalize_path(path), excerpt=excerpt))
+    return result
