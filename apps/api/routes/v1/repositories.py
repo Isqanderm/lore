@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime  # noqa: TCH003
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Self
 from uuid import UUID  # noqa: TCH003
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from lore.connector_sdk.errors import ConnectorNotFoundError, ExternalResourceNotFoundError
 from lore.infrastructure.db.repositories.document import (
@@ -103,6 +103,44 @@ class RepositorySearchResult(BaseModel):
 class RepositorySearchResponse(BaseModel):
     query: str
     results: list[RepositorySearchResult]
+
+
+class RepositoryContextRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=8, ge=1, le=20)
+    max_chars: int = Field(default=12000, ge=1000, le=50000)
+    excerpt_chars: int = Field(default=2000, ge=300, le=10000)
+
+    @field_validator("query")
+    @classmethod
+    def query_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("query must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def excerpt_must_not_exceed_budget(self) -> Self:
+        if self.excerpt_chars > self.max_chars:
+            raise ValueError("excerpt_chars must be <= max_chars")
+        return self
+
+
+class RepositoryContextSource(BaseModel):
+    path: str
+    document_id: UUID
+    version_id: UUID
+    score: float
+    excerpt: str
+    excerpt_start: int
+    excerpt_end: int
+
+
+class RepositoryContextResponse(BaseModel):
+    query: str
+    max_chars: int
+    used_chars: int
+    sources: list[RepositoryContextSource]
 
 
 def _build_import_service(
@@ -292,5 +330,43 @@ async def search_repository(
                 score=hit.score,
             )
             for hit in result.results
+        ],
+    )
+
+
+@router.post("/{repository_id}/context", response_model=RepositoryContextResponse)
+async def build_repository_context(
+    repository_id: UUID,
+    body: RepositoryContextRequest,
+    session: SessionDep,
+) -> RepositoryContextResponse:
+    repo_repo = ExternalRepositoryRepository(session)
+    if await repo_repo.get_by_id(repository_id) is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    svc = RetrievalService(document_repository=DocumentRepository(session))
+    result = await svc.build_repository_context(
+        repository_id=repository_id,
+        query=body.query,
+        limit=body.limit,
+        max_chars=body.max_chars,
+        excerpt_chars=body.excerpt_chars,
+    )
+
+    return RepositoryContextResponse(
+        query=result.query,
+        max_chars=result.max_chars,
+        used_chars=result.used_chars,
+        sources=[
+            RepositoryContextSource(
+                path=s.path,
+                document_id=s.document_id,
+                version_id=s.version_id,
+                score=s.score,
+                excerpt=s.excerpt,
+                excerpt_start=s.excerpt_start,
+                excerpt_end=s.excerpt_end,
+            )
+            for s in result.sources
         ],
     )
