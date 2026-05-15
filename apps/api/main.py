@@ -37,6 +37,3 @@ def create_app() -> FastAPI:
     app.add_exception_handler(LoreError, lore_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
     return app
-
-
-app = create_app()

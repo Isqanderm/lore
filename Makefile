@@ -2,7 +2,7 @@
 
 dev:
 	docker compose up -d postgres redis
-	uv run uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 8000
+	uv run uvicorn apps.api.main:create_app --factory --reload --host 0.0.0.0 --port 8000
 
 test:
 	uv run pytest tests/ -v
