@@ -25,6 +25,40 @@ class RepositorySearchResultSet:
     results: list[RetrievalHit]
 
 
+MIN_REMAINING_EXCERPT_CHARS = 300
+
+
+@dataclass(frozen=True)
+class ContextExcerpt:
+    """Excerpt with character offsets into original content.
+
+    Invariant: content[start:end] == text
+    """
+
+    text: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class ContextSourceItem:
+    path: str
+    document_id: UUID
+    version_id: UUID
+    score: float
+    excerpt: str
+    excerpt_start: int
+    excerpt_end: int
+
+
+@dataclass(frozen=True)
+class RepositoryContextPackage:
+    query: str
+    max_chars: int
+    used_chars: int
+    sources: list[ContextSourceItem]
+
+
 def tokenize_query(query: str) -> list[str]:
     return [token.lower() for token in re.split(r"\W+", query) if len(token) >= 2]
 
@@ -75,6 +109,45 @@ def extract_snippet(
     return snippet + suffix
 
 
+def extract_context_excerpt(
+    content: str | None,
+    terms: list[str],
+    max_chars: int,
+) -> ContextExcerpt:
+    if max_chars <= 0 or not content:
+        return ContextExcerpt(text="", start=0, end=0)
+
+    content_lower = content.lower()
+    match_indexes: list[int] = []
+    for term in terms:
+        if not term:
+            continue
+        idx = content_lower.find(term)
+        if idx != -1:
+            match_indexes.append(idx)
+
+    if match_indexes:
+        idx = min(match_indexes)
+        half = max_chars // 2
+        start = max(0, idx - half)
+        end = min(len(content), start + max_chars)
+        start = max(0, end - max_chars)
+    else:
+        start = 0
+        end = min(len(content), max_chars)
+
+    return ContextExcerpt(text=content[start:end], start=start, end=end)
+
+
+@dataclass(frozen=True)
+class _ScoredDocumentVersion:
+    """Internal implementation detail — not part of the public retrieval API."""
+
+    document: Document
+    version: DocumentVersion
+    score: float
+
+
 class RetrievalService:
     def __init__(
         self,
@@ -82,37 +155,85 @@ class RetrievalService:
     ) -> None:
         self._document_repository = document_repository
 
-    async def search_repository(
+    async def _rank_repository_document_versions(
         self,
         repository_id: UUID,
         query: str,
         limit: int,
-    ) -> RepositorySearchResultSet:
+    ) -> list[_ScoredDocumentVersion]:
         pairs: list[
             tuple[Document, DocumentVersion]
         ] = await self._document_repository.get_active_documents_with_latest_versions_by_repository_id(
             repository_id
         )
         terms = tokenize_query(query)
-
-        scored: list[tuple[float, str, Document, DocumentVersion]] = []
+        scored: list[_ScoredDocumentVersion] = []
         for doc, version in pairs:
             s = score_document(query, terms, doc.path, version.content)
             if s > 0:
-                scored.append((s, doc.path, doc, version))
+                scored.append(_ScoredDocumentVersion(document=doc, version=version, score=s))
+        scored.sort(key=lambda item: (-item.score, item.document.path))
+        return scored[:limit]
 
-        scored.sort(key=lambda x: (-x[0], x[1]))
-        top = scored[:limit]
-
+    async def search_repository(
+        self,
+        repository_id: UUID,
+        query: str,
+        limit: int,
+    ) -> RepositorySearchResultSet:
+        ranked = await self._rank_repository_document_versions(repository_id, query, limit)
+        terms = tokenize_query(query)
         hits = [
             RetrievalHit(
-                path=doc.path,
-                document_id=doc.id,
-                version_id=version.id,
-                snippet=extract_snippet(version.content, terms),
-                score=s,
+                path=item.document.path,
+                document_id=item.document.id,
+                version_id=item.version.id,
+                snippet=extract_snippet(item.version.content, terms),
+                score=item.score,
             )
-            for s, _, doc, version in top
+            for item in ranked
         ]
-
         return RepositorySearchResultSet(query=query, results=hits)
+
+    async def build_repository_context(
+        self,
+        repository_id: UUID,
+        query: str,
+        limit: int,
+        max_chars: int,
+        excerpt_chars: int,
+    ) -> RepositoryContextPackage:
+        if max_chars <= 0 or excerpt_chars <= 0:
+            return RepositoryContextPackage(
+                query=query, max_chars=max_chars, used_chars=0, sources=[]
+            )
+
+        ranked = await self._rank_repository_document_versions(repository_id, query, limit)
+        terms = tokenize_query(query)
+        used = 0
+        sources: list[ContextSourceItem] = []
+
+        for item in ranked:
+            remaining = max_chars - used
+            if remaining < MIN_REMAINING_EXCERPT_CHARS:
+                break
+            per_source = min(excerpt_chars, remaining)
+            excerpt = extract_context_excerpt(item.version.content, terms, per_source)
+            if not excerpt.text:
+                continue
+            sources.append(
+                ContextSourceItem(
+                    path=item.document.path,
+                    document_id=item.document.id,
+                    version_id=item.version.id,
+                    score=item.score,
+                    excerpt=excerpt.text,
+                    excerpt_start=excerpt.start,
+                    excerpt_end=excerpt.end,
+                )
+            )
+            used += len(excerpt.text)
+
+        return RepositoryContextPackage(
+            query=query, max_chars=max_chars, used_chars=used, sources=sources
+        )
