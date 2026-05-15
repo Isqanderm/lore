@@ -106,7 +106,7 @@ CONTENT_TERM_WEIGHT: float = 1.0
 PATH_PHRASE_WEIGHT: float = 15.0
 CONTENT_PHRASE_WEIGHT: float = 8.0
 MAX_CONTENT_TERM_MATCHES: int = 10
-MAX_RAW_SCORE: float = 20.0
+MAX_RAW_SCORE: float = 40.0
 
 
 def score_document(

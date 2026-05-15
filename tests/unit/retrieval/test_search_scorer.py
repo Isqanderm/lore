@@ -226,3 +226,33 @@ def test_score_document_exact_phrase_in_content_contributes() -> None:
         content="this explains repository sync behavior",
     )
     assert score > 0
+
+
+def test_score_document_two_filename_terms_do_not_saturate_before_phrase() -> None:
+    score = score_document(
+        query="repository import",
+        terms=["repository", "import"],
+        path="lore/ingestion/repository_import.py",
+        content="",
+    )
+    assert score < 1.0
+
+
+def test_score_document_phrase_boost_still_increases_score_after_filename_terms() -> None:
+    terms = ["repository", "import"]
+
+    without_phrase = score_document(
+        query="something else",
+        terms=terms,
+        path="lore/ingestion/repository_import.py",
+        content="",
+    )
+
+    with_phrase = score_document(
+        query="repository_import",
+        terms=terms,
+        path="lore/ingestion/repository_import.py",
+        content="",
+    )
+
+    assert with_phrase > without_phrase
