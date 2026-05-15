@@ -6,6 +6,7 @@ from typing import Any
 from uuid import UUID  # noqa: TC003, TCH003
 
 ARTIFACT_TYPE_REPOSITORY_BRIEF = "repository_brief"
+ARTIFACT_TYPE_REPOSITORY_STRUCTURE = "repository_structure"
 
 
 @dataclass(frozen=True)
