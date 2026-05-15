@@ -194,3 +194,46 @@ class RetrievalService:
             for item in ranked
         ]
         return RepositorySearchResultSet(query=query, results=hits)
+
+    async def build_repository_context(
+        self,
+        repository_id: UUID,
+        query: str,
+        limit: int,
+        max_chars: int,
+        excerpt_chars: int,
+    ) -> RepositoryContextPackage:
+        if max_chars <= 0 or excerpt_chars <= 0:
+            return RepositoryContextPackage(
+                query=query, max_chars=max_chars, used_chars=0, sources=[]
+            )
+
+        ranked = await self._rank_repository_document_versions(repository_id, query, limit)
+        terms = tokenize_query(query)
+        used = 0
+        sources: list[ContextSourceItem] = []
+
+        for item in ranked:
+            remaining = max_chars - used
+            if remaining < MIN_REMAINING_EXCERPT_CHARS:
+                break
+            per_source = min(excerpt_chars, remaining)
+            excerpt = extract_context_excerpt(item.version.content, terms, per_source)
+            if not excerpt.text:
+                continue
+            sources.append(
+                ContextSourceItem(
+                    path=item.document.path,
+                    document_id=item.document.id,
+                    version_id=item.version.id,
+                    score=item.score,
+                    excerpt=excerpt.text,
+                    excerpt_start=excerpt.start,
+                    excerpt_end=excerpt.end,
+                )
+            )
+            used += len(excerpt.text)
+
+        return RepositoryContextPackage(
+            query=query, max_chars=max_chars, used_chars=used, sources=sources
+        )
