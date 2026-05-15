@@ -59,8 +59,45 @@ class RepositoryContextPackage:
     sources: list[ContextSourceItem]
 
 
+QUERY_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "does",
+        "for",
+        "from",
+        "how",
+        "in",
+        "into",
+        "is",
+        "it",
+        "of",
+        "on",
+        "or",
+        "the",
+        "to",
+        "what",
+        "where",
+        "which",
+        "with",
+        "within",
+    }
+)
+
+
 def tokenize_query(query: str) -> list[str]:
-    return [token.lower() for token in re.split(r"\W+", query) if len(token) >= 2]
+    tokens: list[str] = []
+    for raw_token in re.split(r"\W+", query):
+        token = raw_token.lower()
+        if len(token) >= 2 and token not in QUERY_STOPWORDS:
+            tokens.append(token)
+    return tokens
 
 
 def score_document(

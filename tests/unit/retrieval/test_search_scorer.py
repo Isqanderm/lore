@@ -98,3 +98,35 @@ def test_extract_snippet_returns_empty_for_none_content() -> None:
 
 def test_extract_snippet_returns_empty_for_empty_string() -> None:
     assert extract_snippet("", ["term"]) == ""
+
+
+def test_tokenize_query_removes_question_stopwords() -> None:
+    assert tokenize_query("How does the repository sync lifecycle work?") == [
+        "repository",
+        "sync",
+        "lifecycle",
+        "work",
+    ]
+
+
+def test_tokenize_query_keeps_domain_terms() -> None:
+    assert tokenize_query(
+        "repository document context source service sync version chunk search route api"
+    ) == [
+        "repository",
+        "document",
+        "context",
+        "source",
+        "service",
+        "sync",
+        "version",
+        "chunk",
+        "search",
+        "route",
+        "api",
+    ]
+
+
+def test_tokenize_query_drops_one_character_tokens_and_stopwords() -> None:
+    # "a" is both length-1 and a stopword; "x" is length-1; "sync" passes both checks.
+    assert tokenize_query("a x sync") == ["sync"]
