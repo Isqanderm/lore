@@ -53,3 +53,11 @@ def test_extract_context_excerpt_never_exceeds_max_chars() -> None:
     result = extract_context_excerpt(content, ["x"], max_chars=200)
     assert result.end - result.start <= 200
     assert len(result.text) <= 200
+
+
+def test_extract_context_excerpt_empty_terms() -> None:
+    content = "hello world " * 10
+    result = extract_context_excerpt(content, [], max_chars=40)
+    assert result.start == 0
+    assert result.text == content[:40]
+    assert content[result.start : result.end] == result.text
