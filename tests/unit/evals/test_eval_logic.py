@@ -13,11 +13,13 @@ from evals.repository_retrieval.eval_logic import (
     EvalSummary,
     RepositoryEvalCase,
     RepositoryEvalDataset,
+    RepositoryInfo,
     context_path_ratio,
     context_terms_ratio,
     evaluate_case,
     extract_context_sources,
     extract_search_paths,
+    format_report,
     has_context_path_hit,
     has_expected_path_in_top_k,
     has_required_terms_hit,
@@ -445,3 +447,100 @@ def test_thresholds_fail_context() -> None:
         context_required_terms_applicable=8,
     )
     assert thresholds_passed(summary, min_top3=0.70, min_context_hit=0.70) is False
+
+
+# ---------------------------------------------------------------------------
+# format_report
+# ---------------------------------------------------------------------------
+
+
+def _make_one_case_dataset(
+    case_id: str, query: str, paths: list[str], terms: list[str]
+) -> RepositoryEvalDataset:
+    return RepositoryEvalDataset(
+        name="test-eval",
+        repository=RepositoryInfo(provider="github", full_name="Isqanderm/lore"),
+        cases=[
+            RepositoryEvalCase(
+                id=case_id,
+                query=query,
+                expected_paths=paths,
+                required_terms_any=terms,
+            )
+        ],
+    )
+
+
+def test_format_report_pass() -> None:
+    dataset = _make_one_case_dataset(
+        "case-1", "How does sync work?", ["lore/sync/service.py"], ["sync"]
+    )
+    result = CaseResult(
+        case_id="case-1",
+        query="How does sync work?",
+        expected_paths=["lore/sync/service.py"],
+        required_terms_any=["sync"],
+        search_paths=["lore/sync/service.py", "other.py"],
+        context_sources=[ContextSource(path="lore/sync/service.py", excerpt="def sync_repository")],
+        search_top1_path_hit=True,
+        search_top3_path_hit=True,
+        search_top5_path_hit=True,
+        context_path_hit=True,
+        context_required_terms_hit=True,
+        context_required_terms_applicable=True,
+    )
+    summary = summarize_results([result])
+    report = format_report(dataset, [result], summary, min_top3=0.70, min_context_hit=0.70)
+    assert "test-eval" in report
+    assert "github" in report
+    assert "Isqanderm/lore" in report
+    assert "Cases: 1" in report
+    assert "PASS" in report
+    assert "Failures" not in report
+
+
+def test_format_report_shows_failure_section() -> None:
+    dataset = _make_one_case_dataset(
+        "case-fail", "Does not find anything?", ["lore/missing.py"], ["missing_fn"]
+    )
+    result = CaseResult(
+        case_id="case-fail",
+        query="Does not find anything?",
+        expected_paths=["lore/missing.py"],
+        required_terms_any=["missing_fn"],
+        search_paths=["other.py", "another.py"],
+        context_sources=[ContextSource(path="other.py", excerpt="some unrelated text")],
+        search_top1_path_hit=False,
+        search_top3_path_hit=False,
+        search_top5_path_hit=False,
+        context_path_hit=False,
+        context_required_terms_hit=False,
+        context_required_terms_applicable=True,
+    )
+    summary = summarize_results([result])
+    report = format_report(dataset, [result], summary, min_top3=0.70, min_context_hit=0.70)
+    assert "FAIL" in report
+    assert "case-fail" in report
+    assert "lore/missing.py" in report
+    assert "search_top3_path_hit" in report
+
+
+def test_format_report_terms_na_when_no_applicable() -> None:
+    dataset = _make_one_case_dataset("case-no-terms", "Something?", ["lore/sync/service.py"], [])
+    result = CaseResult(
+        case_id="case-no-terms",
+        query="Something?",
+        expected_paths=["lore/sync/service.py"],
+        required_terms_any=[],
+        search_paths=["lore/sync/service.py"],
+        context_sources=[ContextSource(path="lore/sync/service.py", excerpt="text")],
+        search_top1_path_hit=True,
+        search_top3_path_hit=True,
+        search_top5_path_hit=True,
+        context_path_hit=True,
+        context_required_terms_hit=True,
+        context_required_terms_applicable=False,
+    )
+    summary = summarize_results([result])
+    report = format_report(dataset, [result], summary, min_top3=0.70, min_context_hit=0.70)
+    assert "n/a" in report

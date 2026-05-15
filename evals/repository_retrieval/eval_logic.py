@@ -244,3 +244,122 @@ def summarize_results(results: list[CaseResult]) -> EvalSummary:
 def thresholds_passed(summary: EvalSummary, min_top3: float, min_context_hit: float) -> bool:
     # context_required_terms_hit is diagnostic in v1 — not a gate.
     return search_top3_ratio(summary) >= min_top3 and context_path_ratio(summary) >= min_context_hit
+
+
+# ---------------------------------------------------------------------------
+# Report formatting
+# ---------------------------------------------------------------------------
+
+
+def _is_case_failed(result: CaseResult) -> bool:
+    # A case appears in Failures if any primary check failed.
+    # context_required_terms_hit is shown in failures even though it is not a
+    # threshold gate in v1 — it is useful diagnostic information.
+    if not result.search_top3_path_hit:
+        return True
+    if not result.context_path_hit:
+        return True
+    if result.context_required_terms_applicable and not result.context_required_terms_hit:
+        return True
+    return False
+
+
+def _format_pct(numerator: int, denominator: int) -> str:
+    pct = ratio(numerator, denominator) * 100
+    return f"{numerator}/{denominator}  {pct:.1f}%"
+
+
+def format_report(
+    dataset: RepositoryEvalDataset,
+    results: list[CaseResult],
+    summary: EvalSummary,
+    min_top3: float,
+    min_context_hit: float,
+) -> str:
+    lines: list[str] = []
+    w = 22
+
+    lines.append(f"Repository Retrieval Eval: {dataset.name}")
+    lines.append("")
+    lines.append("Repository:")
+    lines.append(f"  provider: {dataset.repository.provider}")
+    lines.append(f"  full_name: {dataset.repository.full_name}")
+    lines.append("")
+    lines.append(f"Cases: {summary.total_cases}")
+    lines.append("")
+
+    lines.append(
+        f"{'search_top1_path_hit:':<{w}} "
+        f"{_format_pct(summary.search_top1_hits, summary.total_cases)}"
+    )
+    lines.append(
+        f"{'search_top3_path_hit:':<{w}} "
+        f"{_format_pct(summary.search_top3_hits, summary.total_cases)}"
+    )
+    lines.append(
+        f"{'search_top5_path_hit:':<{w}} "
+        f"{_format_pct(summary.search_top5_hits, summary.total_cases)}"
+    )
+    lines.append(
+        f"{'context_path_hit:':<{w}} "
+        f"{_format_pct(summary.context_path_hits, summary.total_cases)}"
+    )
+
+    terms_r = context_terms_ratio(summary)
+    if terms_r is None:
+        lines.append(f"{'context_terms_hit:':<{w}} n/a")
+    else:
+        app = summary.context_required_terms_applicable
+        lines.append(
+            f"{'context_terms_hit:':<{w}} "
+            f"{summary.context_required_terms_hits}/{app} applicable  {terms_r * 100:.1f}%"
+        )
+
+    lines.append("")
+    lines.append("Thresholds:")
+    lines.append(f"  min_top3:        {min_top3 * 100:.1f}%")
+    lines.append(f"  min_context_hit: {min_context_hit * 100:.1f}%")
+    lines.append("")
+    lines.append(
+        f"Result: {'PASS' if thresholds_passed(summary, min_top3, min_context_hit) else 'FAIL'}"
+    )
+
+    failures = [r for r in results if _is_case_failed(r)]
+    if failures:
+        lines.append("")
+        lines.append("Failures:")
+        for result in failures:
+            failed_checks: list[str] = []
+            if not result.search_top1_path_hit:
+                failed_checks.append("search_top1_path_hit")
+            if not result.search_top3_path_hit:
+                failed_checks.append("search_top3_path_hit")
+            if not result.search_top5_path_hit:
+                failed_checks.append("search_top5_path_hit")
+            if not result.context_path_hit:
+                failed_checks.append("context_path_hit")
+            if result.context_required_terms_applicable and not result.context_required_terms_hit:
+                failed_checks.append("context_terms_hit")
+
+            lines.append(f"- {result.case_id}")
+            lines.append(f"  query: {result.query}")
+            lines.append("  expected_paths:")
+            for p in result.expected_paths:
+                lines.append(f"    - {p}")
+            lines.append("  search_top5:")
+            for p in result.search_paths[:5]:
+                lines.append(f"    - {p}")
+            lines.append("  context_paths:")
+            for src in result.context_sources:
+                lines.append(f"    - {src.path}")
+            if result.required_terms_any:
+                lines.append("  required_terms_any:")
+                for t in result.required_terms_any:
+                    lines.append(f"    - {t}")
+                lines.append(
+                    f"  context_terms_hit: "
+                    f"{'true' if result.context_required_terms_hit else 'false'}"
+                )
+            lines.append(f"  failed_checks: [{', '.join(failed_checks)}]")
+
+    return "\n".join(lines)
