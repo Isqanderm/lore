@@ -196,9 +196,9 @@ def test_score_document_caps_repeated_content_matches() -> None:
 
 
 def test_score_document_exact_phrase_in_path_contributes() -> None:
-    # Both paths contain both terms in path and basename.
-    # Only the first path contains the literal phrase "repository_import".
-    # This isolates the PATH_PHRASE_WEIGHT contribution.
+    # First path: both terms in path and basename, plus literal phrase "repository_import".
+    # Second path: "repository" only in directory segment (not basename), "import" in basename.
+    # Phrase boost isolates the PATH_PHRASE_WEIGHT contribution.
     terms = ["repository", "import"]
 
     score_with_phrase = score_document(
