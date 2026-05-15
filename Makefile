@@ -1,11 +1,11 @@
-.PHONY: dev test test-unit test-integration test-e2e lint format type-check migrate migration
+.PHONY: dev test test-unit test-integration test-e2e test-smoke lint format type-check migrate migration
 
 dev:
 	docker compose up -d postgres redis
 	uv run uvicorn apps.api.main:create_app --factory --reload --host 0.0.0.0 --port 8000
 
 test:
-	uv run pytest tests/ -v
+	uv run pytest tests/ --ignore=tests/smoke -v
 
 test-unit:
 	uv run pytest tests/unit/ -v -m unit
@@ -15,6 +15,9 @@ test-integration:
 
 test-e2e:
 	uv run pytest tests/e2e/ -v -m e2e
+
+test-smoke:
+	uv run pytest tests/smoke/ -v
 
 lint:
 	uv run ruff check .

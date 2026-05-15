@@ -22,6 +22,11 @@ from lore.infrastructure.config import get_settings
 
 @pytest.fixture
 async def live_connector() -> AsyncGenerator[GitHubConnector, None]:
+    import os
+
+    os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
+    os.environ.setdefault("OPENAI_API_KEY", "sk-test")
+    get_settings.cache_clear()
     settings = get_settings()
     client = GitHubClient.from_settings(settings)
     connector = GitHubConnector(
