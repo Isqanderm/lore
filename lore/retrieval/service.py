@@ -59,8 +59,54 @@ class RepositoryContextPackage:
     sources: list[ContextSourceItem]
 
 
+QUERY_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "does",
+        "for",
+        "from",
+        "how",
+        "in",
+        "into",
+        "is",
+        "it",
+        "of",
+        "on",
+        "or",
+        "the",
+        "to",
+        "what",
+        "where",
+        "which",
+        "with",
+        "within",
+    }
+)
+
+
 def tokenize_query(query: str) -> list[str]:
-    return [token.lower() for token in re.split(r"\W+", query) if len(token) >= 2]
+    tokens: list[str] = []
+    for raw_token in re.split(r"\W+", query):
+        token = raw_token.lower()
+        if len(token) >= 2 and token not in QUERY_STOPWORDS:
+            tokens.append(token)
+    return tokens
+
+
+PATH_TERM_WEIGHT: float = 4.0
+BASENAME_TERM_WEIGHT: float = 6.0
+CONTENT_TERM_WEIGHT: float = 1.0
+PATH_PHRASE_WEIGHT: float = 15.0
+CONTENT_PHRASE_WEIGHT: float = 8.0
+MAX_CONTENT_TERM_MATCHES: int = 10
+MAX_RAW_SCORE: float = 40.0
 
 
 def score_document(
@@ -70,19 +116,22 @@ def score_document(
     content: str | None,
 ) -> float:
     path_lower = path.lower()
+    basename_lower = path_lower.rsplit("/", 1)[-1]
     content_lower = (content or "").lower()
     phrase = query.lower().strip()
     raw_score = 0.0
     for term in terms:
         if term in path_lower:
-            raw_score += 3.0
+            raw_score += PATH_TERM_WEIGHT
+        if term in basename_lower:
+            raw_score += BASENAME_TERM_WEIGHT
         count = content_lower.count(term)
-        raw_score += min(count, 10) * 1.0
+        raw_score += min(count, MAX_CONTENT_TERM_MATCHES) * CONTENT_TERM_WEIGHT
     if phrase and phrase in path_lower:
-        raw_score += 15.0
+        raw_score += PATH_PHRASE_WEIGHT
     if phrase and phrase in content_lower:
-        raw_score += 10.0
-    return min(raw_score / 20.0, 1.0)
+        raw_score += CONTENT_PHRASE_WEIGHT
+    return min(raw_score / MAX_RAW_SCORE, 1.0)
 
 
 def extract_snippet(

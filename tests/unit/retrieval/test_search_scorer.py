@@ -98,3 +98,161 @@ def test_extract_snippet_returns_empty_for_none_content() -> None:
 
 def test_extract_snippet_returns_empty_for_empty_string() -> None:
     assert extract_snippet("", ["term"]) == ""
+
+
+def test_tokenize_query_removes_question_stopwords() -> None:
+    assert tokenize_query("How does the repository sync lifecycle work?") == [
+        "repository",
+        "sync",
+        "lifecycle",
+        "work",
+    ]
+
+
+def test_tokenize_query_keeps_domain_terms() -> None:
+    assert tokenize_query(
+        "repository document context source service sync version chunk search route api"
+    ) == [
+        "repository",
+        "document",
+        "context",
+        "source",
+        "service",
+        "sync",
+        "version",
+        "chunk",
+        "search",
+        "route",
+        "api",
+    ]
+
+
+def test_tokenize_query_drops_one_character_tokens_and_stopwords() -> None:
+    # "a" is both length-1 and a stopword; "x" is length-1; "sync" passes both checks.
+    assert tokenize_query("a x sync") == ["sync"]
+
+
+def test_score_document_returns_zero_when_no_terms_match_anywhere() -> None:
+    score = score_document(
+        query="repository sync",
+        terms=["repository", "sync"],
+        path="foo/bar.py",
+        content="unrelated content",
+    )
+    assert score == 0.0
+
+
+def test_score_document_boosts_path_matches() -> None:
+    score = score_document(
+        query="repository sync",
+        terms=["sync"],
+        path="lore/sync/service.py",
+        content="",
+    )
+    assert score > 0
+
+
+def test_score_document_boosts_basename_matches_more_than_directory_matches() -> None:
+    terms = ["import"]
+
+    # "import" appears in both path AND basename (repository_import.py)
+    basename_score = score_document(
+        query="repository import",
+        terms=terms,
+        path="lore/ingestion/repository_import.py",
+        content="",
+    )
+
+    # "import" appears in path directory segment, but NOT in basename (service.py)
+    directory_score = score_document(
+        query="repository import",
+        terms=terms,
+        path="lore/import/service.py",
+        content="",
+    )
+
+    assert basename_score > directory_score
+
+
+def test_score_document_caps_repeated_content_matches() -> None:
+    terms = ["sync"]
+    content_10 = " ".join(["sync"] * 10)
+    content_20 = " ".join(["sync"] * 20)
+
+    score_10 = score_document(
+        query="sync",
+        terms=terms,
+        path="foo.py",
+        content=content_10,
+    )
+    score_20 = score_document(
+        query="sync",
+        terms=terms,
+        path="foo.py",
+        content=content_20,
+    )
+
+    assert score_20 == score_10
+
+
+def test_score_document_exact_phrase_in_path_contributes() -> None:
+    # Both basenames contain "repository" and "import", so term/basename boosts are equal.
+    # Only the first path contains the literal phrase "repository_import" — this isolates
+    # the PATH_PHRASE_WEIGHT contribution.
+    terms = ["repository", "import"]
+
+    score_with_phrase = score_document(
+        query="repository_import",
+        terms=terms,
+        path="lore/ingestion/repository_import.py",
+        content="",
+    )
+
+    score_without_phrase = score_document(
+        query="repository_import",
+        terms=terms,
+        path="lore/ingestion/import_repository.py",
+        content="",
+    )
+
+    assert score_with_phrase > score_without_phrase
+
+
+def test_score_document_exact_phrase_in_content_contributes() -> None:
+    score = score_document(
+        query="repository sync",
+        terms=["repository", "sync"],
+        path="foo.py",
+        content="this explains repository sync behavior",
+    )
+    assert score > 0
+
+
+def test_score_document_two_filename_terms_do_not_saturate_before_phrase() -> None:
+    score = score_document(
+        query="repository import",
+        terms=["repository", "import"],
+        path="lore/ingestion/repository_import.py",
+        content="",
+    )
+    assert score < 1.0
+
+
+def test_score_document_phrase_boost_still_increases_score_after_filename_terms() -> None:
+    terms = ["repository", "import"]
+
+    without_phrase = score_document(
+        query="something else",
+        terms=terms,
+        path="lore/ingestion/repository_import.py",
+        content="",
+    )
+
+    with_phrase = score_document(
+        query="repository_import",
+        terms=terms,
+        path="lore/ingestion/repository_import.py",
+        content="",
+    )
+
+    assert with_phrase > without_phrase
