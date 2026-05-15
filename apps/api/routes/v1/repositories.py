@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Annotated
 from uuid import UUID  # noqa: TCH003
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from lore.connector_sdk.errors import ConnectorNotFoundError, ExternalResourceNotFoundError
 from lore.infrastructure.db.repositories.document import (
@@ -20,6 +20,7 @@ from lore.infrastructure.db.repositories.source import SourceRepository
 from lore.infrastructure.db.session import get_session
 from lore.ingestion.repository_import import RepositoryImportService
 from lore.ingestion.service import IngestionService
+from lore.retrieval.service import RetrievalService
 from lore.sync.errors import RepositoryNotFoundError, UnsupportedSyncModeError
 from lore.sync.service import RepositorySyncService
 
@@ -76,6 +77,32 @@ class RepositorySyncRunListItem(BaseModel):
     versions_skipped: int
     warnings_count: int
     error_message: str | None
+
+
+class RepositorySearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=10, ge=1, le=50)
+
+    @field_validator("query")
+    @classmethod
+    def query_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("query must not be blank")
+        return value
+
+
+class RepositorySearchResult(BaseModel):
+    path: str
+    document_id: UUID
+    version_id: UUID
+    snippet: str
+    score: float
+
+
+class RepositorySearchResponse(BaseModel):
+    query: str
+    results: list[RepositorySearchResult]
 
 
 def _build_import_service(
@@ -237,3 +264,33 @@ async def list_sync_runs(
         )
         for run in runs
     ]
+
+
+@router.post("/{repository_id}/search", response_model=RepositorySearchResponse)
+async def search_repository(
+    repository_id: UUID,
+    body: RepositorySearchRequest,
+    session: SessionDep,
+) -> RepositorySearchResponse:
+    repo_repo = ExternalRepositoryRepository(session)
+    repo = await repo_repo.get_by_id(repository_id)
+    if repo is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    doc_repo = DocumentRepository(session)
+    svc = RetrievalService(document_repository=doc_repo)
+    result = await svc.search_repository(repository_id, body.query, body.limit)
+
+    return RepositorySearchResponse(
+        query=result.query,
+        results=[
+            RepositorySearchResult(
+                path=hit.path,
+                document_id=hit.document_id,
+                version_id=hit.version_id,
+                snippet=hit.snippet,
+                score=hit.score,
+            )
+            for hit in result.results
+        ],
+    )

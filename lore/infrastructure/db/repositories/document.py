@@ -154,6 +154,48 @@ class DocumentRepository(BaseRepository[DocumentORM]):
         cursor: CursorResult[tuple[()]] = await self.session.execute(stmt)  # type: ignore[assignment]
         return cursor.rowcount or 0
 
+    async def get_active_documents_with_latest_versions_by_repository_id(
+        self, repository_id: UUID
+    ) -> list[tuple[Document, DocumentVersion]]:
+        latest_versions_subq = select(
+            DocumentVersionORM.id.label("version_id"),
+            DocumentVersionORM.document_id.label("document_id"),
+            func.row_number()
+            .over(
+                partition_by=DocumentVersionORM.document_id,
+                order_by=(
+                    DocumentVersionORM.version.desc(),
+                    DocumentVersionORM.created_at.desc(),
+                    DocumentVersionORM.id.desc(),
+                ),
+            )
+            .label("rn"),
+        ).subquery()
+
+        stmt = (
+            select(DocumentORM, DocumentVersionORM)
+            .join(SourceORM, DocumentORM.source_id == SourceORM.id)
+            .join(ExternalObjectORM, SourceORM.external_object_id == ExternalObjectORM.id)
+            .join(
+                latest_versions_subq,
+                latest_versions_subq.c.document_id == DocumentORM.id,
+            )
+            .join(
+                DocumentVersionORM,
+                DocumentVersionORM.id == latest_versions_subq.c.version_id,
+            )
+            .where(latest_versions_subq.c.rn == 1)
+            .where(ExternalObjectORM.repository_id == repository_id)
+            .where(ExternalObjectORM.object_type == _GITHUB_FILE_OBJECT_TYPE)
+            .where(DocumentORM.is_active.is_(True))
+        )
+
+        result = await self.session.execute(stmt)
+        rows = result.all()
+        return [
+            (_doc_orm_to_schema(doc_orm), _dv_orm_to_schema(dv_orm)) for doc_orm, dv_orm in rows
+        ]
+
     async def get_by_source_kind_path(
         self,
         source_id: UUID,

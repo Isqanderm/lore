@@ -38,6 +38,13 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 async def client() -> AsyncGenerator[AsyncClient, None]:
+    import os
+
+    from lore.infrastructure.config import get_settings
+
+    os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
+    os.environ.setdefault("OPENAI_API_KEY", "sk-test")
+    get_settings.cache_clear()
     app = create_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
@@ -82,7 +89,15 @@ async def db_session(db_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
 
 
 @pytest_asyncio.fixture(loop_scope="session")
-async def app_with_db(db_session: AsyncSession) -> AsyncGenerator[FastAPI, None]:
+async def app_with_db(db_session: AsyncSession, db_url: str) -> AsyncGenerator[FastAPI, None]:
+    import os
+
+    from lore.infrastructure.config import get_settings
+
+    os.environ.setdefault("DATABASE_URL", db_url)
+    os.environ.setdefault("OPENAI_API_KEY", "sk-test")
+    get_settings.cache_clear()
+
     from lore.infrastructure.db.session import get_session
 
     app = create_app()

@@ -75,8 +75,16 @@ async def db_session(db_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
 
 
 @pytest_asyncio.fixture(loop_scope="session")
-async def app_with_db(db_session: AsyncSession) -> AsyncGenerator[FastAPI, None]:
+async def app_with_db(db_session: AsyncSession, db_url: str) -> AsyncGenerator[FastAPI, None]:
     """FastAPI app with DB session injected via dependency_overrides."""
+    import os
+
+    from lore.infrastructure.config import get_settings
+
+    os.environ.setdefault("DATABASE_URL", db_url)
+    os.environ.setdefault("OPENAI_API_KEY", "sk-test")
+    get_settings.cache_clear()
+
     from apps.api.main import create_app
     from lore.infrastructure.db.session import get_session
 
