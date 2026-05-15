@@ -136,3 +136,38 @@ def extract_context_sources(response: dict[str, Any]) -> list[ContextSource]:
             raise ValueError(f"Context source at index {index}: 'excerpt' must be str or null")
         result.append(ContextSource(path=normalize_path(path), excerpt=excerpt))
     return result
+
+
+# ---------------------------------------------------------------------------
+# Metric functions
+# ---------------------------------------------------------------------------
+
+
+def has_expected_path_in_top_k(result_paths: list[str], expected_paths: list[str], k: int) -> bool:
+    top_k = {normalize_path(p) for p in result_paths[:k]}
+    expected = {normalize_path(p) for p in expected_paths}
+    return bool(expected & top_k)
+
+
+def has_context_path_hit(sources: list[ContextSource], expected_paths: list[str]) -> bool:
+    paths = {normalize_path(s.path) for s in sources}
+    expected = {normalize_path(p) for p in expected_paths}
+    return bool(expected & paths)
+
+
+def has_required_terms_hit(sources: list[ContextSource], required_terms_any: list[str]) -> bool:
+    # Empty terms → not applicable → treated as passed.
+    # Callers check is_required_terms_applicable to exclude from aggregate denominator.
+    if not required_terms_any:
+        return True
+    terms_lower = [t.lower() for t in required_terms_any]
+    for source in sources:
+        if source.excerpt:
+            excerpt_lower = source.excerpt.lower()
+            if any(term in excerpt_lower for term in terms_lower):
+                return True
+    return False
+
+
+def is_required_terms_applicable(required_terms_any: list[str]) -> bool:
+    return bool(required_terms_any)

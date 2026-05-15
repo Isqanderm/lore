@@ -8,9 +8,13 @@ import pytest
 from pydantic import ValidationError
 
 from evals.repository_retrieval.eval_logic import (
+    ContextSource,
     RepositoryEvalDataset,
     extract_context_sources,
     extract_search_paths,
+    has_context_path_hit,
+    has_expected_path_in_top_k,
+    has_required_terms_hit,
     load_dataset,
     normalize_path,
 )
@@ -170,3 +174,60 @@ def test_extract_context_sources_invalid_excerpt_type() -> None:
     response = {"sources": [{"path": "foo.py", "excerpt": 42}]}
     with pytest.raises(ValueError, match="'excerpt' must be str or null"):
         extract_context_sources(response)
+
+
+# ---------------------------------------------------------------------------
+# has_expected_path_in_top_k
+# ---------------------------------------------------------------------------
+
+
+def test_top_k_hit_true_k3() -> None:
+    result_paths = ["a.py", "b.py", "c.py", "d.py"]
+    assert has_expected_path_in_top_k(result_paths, ["b.py"], 3) is True
+
+
+def test_top_k_hit_false_k3() -> None:
+    result_paths = ["a.py", "b.py", "c.py", "d.py"]
+    assert has_expected_path_in_top_k(result_paths, ["d.py"], 3) is False
+
+
+def test_top1_only_checks_first() -> None:
+    # b.py is at index 1; top-1 only looks at index 0
+    result_paths = ["a.py", "b.py"]
+    assert has_expected_path_in_top_k(result_paths, ["b.py"], 1) is False
+
+
+# ---------------------------------------------------------------------------
+# has_context_path_hit
+# ---------------------------------------------------------------------------
+
+
+def test_context_path_hit_true() -> None:
+    sources = [ContextSource(path="foo/bar.py", excerpt="text")]
+    assert has_context_path_hit(sources, ["foo/bar.py"]) is True
+
+
+def test_context_path_hit_false() -> None:
+    sources = [ContextSource(path="foo/bar.py", excerpt="text")]
+    assert has_context_path_hit(sources, ["baz/qux.py"]) is False
+
+
+# ---------------------------------------------------------------------------
+# has_required_terms_hit
+# ---------------------------------------------------------------------------
+
+
+def test_required_terms_hit_true() -> None:
+    sources = [ContextSource(path="f.py", excerpt="This calls sync_repository")]
+    assert has_required_terms_hit(sources, ["sync_repository"]) is True
+
+
+def test_required_terms_hit_case_insensitive() -> None:
+    sources = [ContextSource(path="f.py", excerpt="calls SYNC_REPOSITORY here")]
+    assert has_required_terms_hit(sources, ["sync_repository"]) is True
+
+
+def test_required_terms_hit_empty_terms() -> None:
+    # Empty required_terms_any → not applicable → treated as passed
+    sources = [ContextSource(path="f.py", excerpt="anything")]
+    assert has_required_terms_hit(sources, []) is True
