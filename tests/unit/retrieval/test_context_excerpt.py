@@ -35,11 +35,37 @@ def test_extract_context_excerpt_centers_on_matched_term() -> None:
     assert "TARGET" in result.text
 
 
-def test_extract_context_excerpt_uses_earliest_term_match() -> None:
-    content = "aaa second " + "x" * 100 + " first"
-    result = extract_context_excerpt(content, ["first", "second"], max_chars=40)
-    assert "second" in result.text
-    assert result.start <= content.index("second")
+def test_extract_context_excerpt_tie_breaks_to_earlier_equivalent_window() -> None:
+    content = "alpha beta " + ("x" * 300) + "alpha beta"
+
+    result = extract_context_excerpt(content, ["alpha", "beta"], max_chars=50)
+
+    assert result.start == 0
+    assert "alpha beta" in result.text
+
+
+def test_extract_context_excerpt_prefers_dense_term_window_over_earliest_match() -> None:
+    content = (
+        "repository appears early. "
+        + ("x" * 500)
+        + " build_repository_context excerpt_chars max_chars "
+        + ("y" * 500)
+    )
+
+    result = extract_context_excerpt(
+        content,
+        ["repository", "context", "excerpt_chars", "max_chars"],
+        max_chars=120,
+    )
+
+    early_repository_index = content.index("repository")
+    dense_cluster_index = content.index("build_repository_context")
+
+    assert "build_repository_context" in result.text
+    assert "excerpt_chars" in result.text
+    assert "max_chars" in result.text
+    assert result.start > early_repository_index  # did NOT pick earliest
+    assert result.start <= dense_cluster_index  # window reached the dense cluster
 
 
 def test_extract_context_excerpt_offset_invariant() -> None:
@@ -53,6 +79,25 @@ def test_extract_context_excerpt_never_exceeds_max_chars() -> None:
     result = extract_context_excerpt(content, ["x"], max_chars=200)
     assert result.end - result.start <= 200
     assert len(result.text) <= 200
+
+
+def test_extract_context_excerpt_case_insensitive_matching() -> None:
+    content = ("prefix " * 50) + "TARGET TERM" + (" suffix" * 50)
+
+    result = extract_context_excerpt(content, ["target", "term"], max_chars=100)
+
+    assert "TARGET TERM" in result.text
+
+
+def test_extract_context_excerpt_clamps_window_near_end_of_content() -> None:
+    content = ("x" * 200) + "needle"
+
+    result = extract_context_excerpt(content, ["needle"], max_chars=50)
+
+    assert "needle" in result.text
+    assert result.end == len(content)
+    assert result.end - result.start <= 50
+    assert content[result.start : result.end] == result.text
 
 
 def test_extract_context_excerpt_empty_terms() -> None:
