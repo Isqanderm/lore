@@ -361,6 +361,8 @@ class RetrievalService:
         terms = tokenize_query(query)
         scored: list[_ScoredDocumentVersion] = []
         for doc, version in pairs:
+            if not _is_retrievable_repository_path(doc.path):
+                continue
             s = score_document(query, terms, doc.path, version.content)
             if s > 0:
                 scored.append(_ScoredDocumentVersion(document=doc, version=version, score=s))
