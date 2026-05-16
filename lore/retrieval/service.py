@@ -26,6 +26,7 @@ class RepositorySearchResultSet:
 
 
 MIN_REMAINING_EXCERPT_CHARS = 300
+MAX_TERM_OCCURRENCES_PER_TERM = 50
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,12 @@ class ContextExcerpt:
     text: str
     start: int
     end: int
+
+
+@dataclass(frozen=True)
+class _TermOccurrence:
+    term: str
+    index: int
 
 
 @dataclass(frozen=True)
@@ -158,6 +165,68 @@ def extract_snippet(
     return snippet + suffix
 
 
+def _find_term_occurrences(content_lower: str, terms: list[str]) -> list[_TermOccurrence]:
+    occurrences: list[_TermOccurrence] = []
+    seen_terms: set[str] = set()
+
+    for term in terms:
+        term_lower = term.lower()
+        if not term_lower or term_lower in seen_terms:
+            continue
+        seen_terms.add(term_lower)
+
+        start = 0
+        found_for_term = 0
+
+        while found_for_term < MAX_TERM_OCCURRENCES_PER_TERM:
+            index = content_lower.find(term_lower, start)
+            if index == -1:
+                break
+            occurrences.append(_TermOccurrence(term=term_lower, index=index))
+            found_for_term += 1
+            start = index + 1
+
+    return occurrences
+
+
+def _score_window(
+    occurrences: list[_TermOccurrence],
+    start: int,
+    end: int,
+) -> tuple[int, int, int]:
+    unique: set[str] = set()
+    total = 0
+    for occ in occurrences:
+        if start <= occ.index < end:
+            unique.add(occ.term)
+            total += 1
+    return (len(unique), total, -start)
+
+
+def _find_best_excerpt_window(
+    content_len: int,
+    occurrences: list[_TermOccurrence],
+    max_chars: int,
+) -> tuple[int, int]:
+    if not occurrences:
+        return (0, min(content_len, max_chars))
+
+    half = max_chars // 2
+    best_score: tuple[int, int, int] | None = None
+    best_window: tuple[int, int] = (0, min(content_len, max_chars))
+
+    for occ in occurrences:
+        start = max(0, occ.index - half)
+        start = min(start, max(0, content_len - max_chars))
+        end = min(content_len, start + max_chars)
+        score = _score_window(occurrences, start, end)
+        if best_score is None or score > best_score:
+            best_score = score
+            best_window = (start, end)
+
+    return best_window
+
+
 def extract_context_excerpt(
     content: str | None,
     terms: list[str],
@@ -167,24 +236,8 @@ def extract_context_excerpt(
         return ContextExcerpt(text="", start=0, end=0)
 
     content_lower = content.lower()
-    match_indexes: list[int] = []
-    for term in terms:
-        if not term:
-            continue
-        idx = content_lower.find(term)
-        if idx != -1:
-            match_indexes.append(idx)
-
-    if match_indexes:
-        idx = min(match_indexes)
-        half = max_chars // 2
-        start = max(0, idx - half)
-        end = min(len(content), start + max_chars)
-        start = max(0, end - max_chars)
-    else:
-        start = 0
-        end = min(len(content), max_chars)
-
+    occurrences = _find_term_occurrences(content_lower, terms)
+    start, end = _find_best_excerpt_window(len(content), occurrences, max_chars)
     return ContextExcerpt(text=content[start:end], start=start, end=end)
 
 
