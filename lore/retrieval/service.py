@@ -66,6 +66,96 @@ class RepositoryContextPackage:
     sources: list[ContextSourceItem]
 
 
+RETRIEVAL_EXCLUDED_PATH_SEGMENTS: frozenset[str] = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        ".venv",
+        "venv",
+        "env",
+        "site-packages",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".tox",
+        ".next",
+        ".nuxt",
+        ".turbo",
+        ".cache",
+        ".parcel-cache",
+        ".svelte-kit",
+        "node_modules",
+        "bower_components",
+        "dist",
+        "build",
+        "coverage",
+        "htmlcov",
+        "target",
+    }
+)
+
+RETRIEVAL_EXCLUDED_FILENAMES: frozenset[str] = frozenset(
+    {
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "poetry.lock",
+        "pipfile.lock",
+        "cargo.lock",
+        "composer.lock",
+        "gemfile.lock",
+    }
+)
+
+RETRIEVAL_EXCLUDED_SUFFIXES: tuple[str, ...] = (
+    ".min.js",
+    ".min.css",
+    ".map",
+    ".lock",
+    ".pyc",
+    ".pyo",
+    ".class",
+    ".o",
+    ".so",
+    ".dylib",
+    ".dll",
+    ".exe",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".tgz",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".ico",
+    ".wasm",
+    ".br",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+)
+
+
+def _is_retrievable_repository_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").strip().lower()
+    if not normalized:
+        return False
+    segments = [segment for segment in normalized.split("/") if segment]
+    if not segments:
+        return False
+    if any(segment in RETRIEVAL_EXCLUDED_PATH_SEGMENTS for segment in segments):
+        return False
+    filename = segments[-1]
+    if filename in RETRIEVAL_EXCLUDED_FILENAMES:
+        return False
+    return not filename.endswith(RETRIEVAL_EXCLUDED_SUFFIXES)
+
+
 QUERY_STOPWORDS: frozenset[str] = frozenset(
     {
         "a",
